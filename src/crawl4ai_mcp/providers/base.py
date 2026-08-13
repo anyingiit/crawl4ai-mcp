@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import time
+from collections.abc import Iterable
 from typing import Protocol, runtime_checkable
+
+import httpx
 
 from crawl4ai_mcp.models import (
     CostKind,
@@ -15,13 +18,48 @@ from crawl4ai_mcp.models import (
 def classify_provider_error(status_code: int, detail: str = "") -> ProviderErrorKind:
     if status_code in {401, 403}:
         return ProviderErrorKind.AUTH
+    if status_code == 402 or "credit" in detail.lower():
+        return ProviderErrorKind.QUOTA
     if status_code == 429:
         return ProviderErrorKind.RATE_LIMIT
     if status_code >= 500:
         return ProviderErrorKind.SERVICE
-    if status_code == 402 or "credit" in detail.lower():
-        return ProviderErrorKind.QUOTA
     return ProviderErrorKind.MALFORMED_RESPONSE
+
+
+def safe_error_detail(
+    value: object, secrets: Iterable[str] | None = None, limit: int = 200
+) -> str:
+    if not isinstance(value, str):
+        return ""
+    text = value.strip()
+    if secrets:
+        for secret in secrets:
+            if secret:
+                text = text.replace(secret, "[redacted]")
+    return text[:limit]
+
+
+def extract_error_detail(
+    response: httpx.Response, secrets: Iterable[str] | None = None
+) -> str:
+    try:
+        parsed = response.json()
+    except Exception:
+        try:
+            return safe_error_detail(response.text, secrets)
+        except Exception:
+            return ""
+    if isinstance(parsed, dict):
+        for key in ("error", "detail", "message"):
+            detail = safe_error_detail(parsed.get(key), secrets)
+            if detail:
+                return detail
+        return ""
+    try:
+        return safe_error_detail(response.text, secrets)
+    except Exception:
+        return ""
 
 
 def failed_result(

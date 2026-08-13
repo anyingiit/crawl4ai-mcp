@@ -11,7 +11,12 @@ from crawl4ai_mcp.models import (
     ProviderErrorKind,
     Tier,
 )
-from crawl4ai_mcp.providers.base import classify_provider_error, failed_result
+from crawl4ai_mcp.providers.base import (
+    classify_provider_error,
+    extract_error_detail,
+    failed_result,
+    safe_error_detail,
+)
 
 API_URL = "https://api.firecrawl.dev/v2/scrape"
 
@@ -56,11 +61,7 @@ class FirecrawlProvider:
             )
         provider_status = response.status_code
         if provider_status != 200:
-            detail = ""
-            try:
-                detail = (response.json().get("error") or "").strip()
-            except Exception:
-                pass
+            detail = extract_error_detail(response, [self.api_key] if self.api_key else None)
             message = detail or f"firecrawl http {provider_status}"
             return failed_result(
                 url, self.tier, self.cost_kind, message, started,
@@ -87,7 +88,14 @@ class FirecrawlProvider:
         payload = data.get("data")
         metadata = payload.get("metadata") if isinstance(payload, dict) else None
         target_status = metadata.get("statusCode") if isinstance(metadata, dict) else None
-        if not isinstance(target_status, int):
+        html_value = payload.get("html") if isinstance(payload, dict) else None
+        markdown_value = payload.get("markdown") if isinstance(payload, dict) else None
+        if (
+            not isinstance(target_status, int)
+            or isinstance(target_status, bool)
+            or (html_value is not None and not isinstance(html_value, str))
+            or (markdown_value is not None and not isinstance(markdown_value, str))
+        ):
             return failed_result(
                 url, self.tier, self.cost_kind, "malformed firecrawl response", started,
                 provider_status_code=provider_status,
@@ -100,10 +108,12 @@ class FirecrawlProvider:
             cost_kind=self.cost_kind,
             target_status_code=target_status,
             provider_status_code=provider_status,
-            html=payload.get("html") or "",
-            markdown=payload.get("markdown"),
+            html=html_value or "",
+            markdown=markdown_value,
             elapsed_ms=int((time.monotonic() - started) * 1000),
-            error=data.get("error") if data.get("success") is False else None,
+            error=(
+                safe_error_detail(data.get("error"), [self.api_key] if self.api_key else None) or None
+            ) if data.get("success") is False else None,
         )
 
     async def close(self) -> None:

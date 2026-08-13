@@ -172,6 +172,106 @@ async def test_rayobyte_invalid_json_is_malformed_kind(respx_mock):
 
 
 @pytest.mark.asyncio
+async def test_rayobyte_http_error_extracts_json_error_detail(respx_mock):
+    respx_mock.get(API_URL).mock(
+        return_value=httpx.Response(500, json={"error": "Upstream exploded"})
+    )
+    result = await RayobyteProvider(API_URL, "key").fetch("https://example.com/")
+    assert result.target_status_code is None
+    assert result.provider_status_code == 500
+    assert result.provider_error_kind == ProviderErrorKind.SERVICE
+    assert "Upstream exploded" in (result.provider_error or "")
+    assert "Upstream exploded" in (result.error or "")
+
+
+@pytest.mark.asyncio
+async def test_rayobyte_http_error_falls_back_to_body_text(respx_mock):
+    respx_mock.get(API_URL).mock(
+        return_value=httpx.Response(503, text="<html>service unavailable</html>")
+    )
+    result = await RayobyteProvider(API_URL, "key").fetch("https://example.com/")
+    assert result.provider_status_code == 503
+    assert result.provider_error_kind == ProviderErrorKind.SERVICE
+    assert "service unavailable" in (result.provider_error or "")
+
+
+@pytest.mark.asyncio
+async def test_rayobyte_credit_exhausted_body_is_quota_even_with_non_402_status(respx_mock):
+    respx_mock.get(API_URL).mock(
+        return_value=httpx.Response(500, json={"error": "credits exhausted, top up account"})
+    )
+    result = await RayobyteProvider(API_URL, "key").fetch("https://example.com/")
+    assert result.provider_status_code == 500
+    assert result.provider_error_kind == ProviderErrorKind.QUOTA
+    assert "credits exhausted" in (result.provider_error or "")
+
+
+@pytest.mark.asyncio
+async def test_rayobyte_http_error_detail_never_exposes_api_key(respx_mock):
+    respx_mock.get(API_URL).mock(
+        return_value=httpx.Response(401, json={"error": "Invalid token: rb-secret-key-123"})
+    )
+    result = await RayobyteProvider(API_URL, "rb-secret-key-123").fetch("https://example.com/")
+    assert result.provider_error_kind == ProviderErrorKind.AUTH
+    assert "rb-secret-key-123" not in (result.provider_error or "")
+    assert "rb-secret-key-123" not in (result.error or "")
+
+
+@pytest.mark.parametrize("http_code", [True, False, "200", 200.5, None, {"a": 1}, [200]])
+@pytest.mark.asyncio
+async def test_rayobyte_non_integer_http_code_is_malformed(respx_mock, http_code):
+    respx_mock.get(API_URL).mock(
+        return_value=httpx.Response(
+            200, json={"status": "SUCCESS", "httpCode": http_code, "result": "<main>Hello</main>"}
+        )
+    )
+    result = await RayobyteProvider(API_URL, "key").fetch("https://example.com/")
+    assert result.target_status_code is None
+    assert result.provider_error_kind == ProviderErrorKind.MALFORMED_RESPONSE
+
+
+@pytest.mark.parametrize("result_value", [{"a": 1}, ["x"], 200, True, None])
+@pytest.mark.asyncio
+async def test_rayobyte_non_string_result_is_malformed(respx_mock, result_value):
+    respx_mock.get(API_URL).mock(
+        return_value=httpx.Response(
+            200, json={"status": "SUCCESS", "httpCode": 200, "result": result_value}
+        )
+    )
+    result = await RayobyteProvider(API_URL, "key").fetch("https://example.com/")
+    assert result.target_status_code is None
+    assert result.provider_error_kind == ProviderErrorKind.MALFORMED_RESPONSE
+    assert result.html == ""
+
+
+@pytest.mark.asyncio
+async def test_rayobyte_fail_body_bool_status_code_is_malformed(respx_mock):
+    respx_mock.get(API_URL).mock(
+        return_value=httpx.Response(
+            200, json={"status": "FAIL", "statusCode": True, "error": "boom"}
+        )
+    )
+    result = await RayobyteProvider(API_URL, "key").fetch("https://example.com/")
+    assert result.target_status_code is None
+    assert result.provider_status_code == 200
+    assert result.provider_error_kind == ProviderErrorKind.MALFORMED_RESPONSE
+
+
+@pytest.mark.asyncio
+async def test_rayobyte_fail_body_non_string_error_is_sanitized(respx_mock):
+    respx_mock.get(API_URL).mock(
+        return_value=httpx.Response(
+            200, json={"status": "FAIL", "statusCode": 401, "error": {"message": "secret"}}
+        )
+    )
+    result = await RayobyteProvider(API_URL, "key").fetch("https://example.com/")
+    assert result.provider_error_kind == ProviderErrorKind.AUTH
+    assert result.error is not None
+    assert "secret" not in (result.error or "")
+    assert "secret" not in (result.provider_error or "")
+
+
+@pytest.mark.asyncio
 async def test_rayobyte_unavailable_without_credentials():
     provider = RayobyteProvider(api_url=None, api_key=None)
     availability = provider.availability()

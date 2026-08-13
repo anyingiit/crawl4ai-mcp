@@ -86,6 +86,17 @@ def test_every_provider_error_kind_is_provider_failure(kind):
     assert classify(result) == Decision.PROVIDER_FAILURE
 
 
+def test_provider_transport_failure_without_status_is_provider_failure():
+    result = FetchResult(
+        url="https://example.com", tier=Tier.RAYOBYTE,
+        cost_kind=CostKind.RAYOBYTE_CREDIT,
+        target_status_code=None, provider_status_code=None,
+        provider_error_kind=ProviderErrorKind.TRANSPORT,
+        provider_error="connection refused", error="connection refused", elapsed_ms=1,
+    )
+    assert classify(result) == Decision.PROVIDER_FAILURE
+
+
 def test_provider_rate_limit_is_not_target_rate_limited():
     result = FetchResult(
         url="https://example.com", tier=Tier.RAYOBYTE,

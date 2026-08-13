@@ -16,7 +16,9 @@ def classify(result: FetchResult, visible_text_threshold: int = 200) -> Decision
         return Decision.POLICY_REJECTED
     if result.network_error:
         return Decision.TARGET_NETWORK
-    if result.provider_status_code is not None and result.target_status_code is None:
+    if result.provider_error_kind is not None or (
+        result.provider_status_code is not None and result.target_status_code is None
+    ):
         return Decision.PROVIDER_FAILURE
     if result.target_status_code in TERMINAL_STATUSES:
         return Decision.TERMINAL

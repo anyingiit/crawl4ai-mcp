@@ -134,6 +134,60 @@ async def test_firecrawl_transport_error_is_transport_kind(respx_mock):
 
 
 @pytest.mark.asyncio
+async def test_firecrawl_http_error_detail_never_exposes_api_key(respx_mock):
+    respx_mock.post(API_URL).mock(
+        return_value=httpx.Response(401, json={"error": "invalid token: fc-secret-key-456"})
+    )
+    result = await FirecrawlProvider("fc-secret-key-456").fetch("https://example.com/")
+    assert result.provider_error_kind == ProviderErrorKind.AUTH
+    assert "fc-secret-key-456" not in (result.provider_error or "")
+    assert "fc-secret-key-456" not in (result.error or "")
+
+
+@pytest.mark.parametrize("status", [True, False, "200", 200.5, None])
+@pytest.mark.asyncio
+async def test_firecrawl_non_integer_metadata_status_is_malformed(respx_mock, status):
+    respx_mock.post(API_URL).mock(
+        return_value=httpx.Response(200, json={
+            "success": True,
+            "data": {"markdown": "# x", "html": "<p>x</p>", "metadata": {"statusCode": status}},
+        })
+    )
+    result = await FirecrawlProvider("fc-test").fetch("https://example.com/")
+    assert result.target_status_code is None
+    assert result.provider_error_kind == ProviderErrorKind.MALFORMED_RESPONSE
+
+
+@pytest.mark.parametrize("content", [{"a": 1}, ["x"], 200, True])
+@pytest.mark.asyncio
+async def test_firecrawl_non_string_content_is_malformed(respx_mock, content):
+    respx_mock.post(API_URL).mock(
+        return_value=httpx.Response(200, json={
+            "success": True,
+            "data": {"markdown": content, "html": content, "metadata": {"statusCode": 200}},
+        })
+    )
+    result = await FirecrawlProvider("fc-test").fetch("https://example.com/")
+    assert result.target_status_code is None
+    assert result.provider_error_kind == ProviderErrorKind.MALFORMED_RESPONSE
+
+
+@pytest.mark.asyncio
+async def test_firecrawl_nullable_content_is_accepted(respx_mock):
+    respx_mock.post(API_URL).mock(
+        return_value=httpx.Response(200, json={
+            "success": True,
+            "data": {"markdown": None, "html": None, "metadata": {"statusCode": 200}},
+        })
+    )
+    result = await FirecrawlProvider("fc-test").fetch("https://example.com/")
+    assert result.target_status_code == 200
+    assert result.provider_error_kind is None
+    assert result.html == ""
+    assert result.markdown is None
+
+
+@pytest.mark.asyncio
 async def test_firecrawl_unavailable_without_key():
     provider = FirecrawlProvider(api_key=None)
     availability = provider.availability()
