@@ -120,6 +120,9 @@ class BrowserProvider:
     async def close(self) -> None:
         await self._close_crawler()
 
+    def is_active(self) -> bool:
+        return self._crawler is not None
+
     def availability(self) -> ProviderAvailability:
         if self.tier == Tier.PROXY and not self.proxy_pool:
             return ProviderAvailability(

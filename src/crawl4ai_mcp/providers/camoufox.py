@@ -118,6 +118,9 @@ class CamoufoxProvider:
                 pass
             self._session = None
 
+    def is_active(self) -> bool:
+        return self._session is not None
+
     def availability(self) -> ProviderAvailability:
         if not self.enabled:
             return ProviderAvailability(enabled=False, ready=False, reason="disabled")
