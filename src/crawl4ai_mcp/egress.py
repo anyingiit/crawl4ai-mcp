@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import ipaddress
 import socket
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import Awaitable, Callable, Sequence
 from urllib.parse import urlsplit, urlunsplit
+
+from crawl4ai.async_configs import ProxyConfig
 
 IPv4Address = ipaddress.IPv4Address
 IPv6Address = ipaddress.IPv6Address
@@ -238,3 +241,435 @@ class UrlPolicy:
             port=validated.port,
             addresses=tuple(unique),
         )
+
+
+_MAX_HEADER_BYTES = 64 * 1024
+
+
+@dataclass(frozen=True)
+class UpstreamProxy:
+    server: str
+    username: str | None = None
+    password: str | None = None
+
+
+def _basic_auth(upstream: UpstreamProxy) -> str | None:
+    if upstream.username is None and upstream.password is None:
+        return None
+    token = base64.b64encode(
+        f"{upstream.username or ''}:{upstream.password or ''}".encode()
+    ).decode()
+    return f"Basic {token}"
+
+
+def _authority(address: str, port: int) -> str:
+    host = f"[{address}]" if ":" in address else address
+    return f"{host}:{port}"
+
+
+def build_upstream_connect(
+    address: str, port: int, upstream: UpstreamProxy
+) -> bytes:
+    authority = _authority(address, port)
+    lines = [f"CONNECT {authority} HTTP/1.1", f"Host: {authority}"]
+    auth = _basic_auth(upstream)
+    if auth is not None:
+        lines.append(f"Proxy-Authorization: {auth}")
+    return ("\r\n".join(lines) + "\r\n\r\n").encode("latin-1")
+
+
+def _parse_upstream_server(upstream: UpstreamProxy) -> tuple[str, int, bool]:
+    parts = urlsplit(upstream.server if "://" in upstream.server else f"http://{upstream.server}")
+    scheme = parts.scheme.lower() or "http"
+    host = parts.hostname or ""
+    if not host:
+        raise UrlPolicyError(UrlPolicyReason.INVALID_HOST, upstream.server, "missing proxy host")
+    port = parts.port or (443 if scheme == "https" else 80)
+    return host, port, scheme == "https"
+
+
+def _connect_probe_url(host: str, port: int) -> str:
+    return f"https://[{host}]:{port}" if ":" in host else f"https://{host}:{port}"
+
+
+class PinnedEgressProxy:
+    def __init__(
+        self,
+        policy: UrlPolicy,
+        connect: Callable[[str, int], Awaitable[tuple]] | None = None,
+    ):
+        self._policy = policy
+        self._connect = connect
+        self._direct_server: asyncio.AbstractServer | None = None
+        self._direct_endpoint: ProxyConfig | None = None
+        self._upstream_servers: dict[UpstreamProxy, asyncio.AbstractServer] = {}
+        self._upstream_endpoints: dict[UpstreamProxy, ProxyConfig] = {}
+        self._upstream_bind_tasks: set[asyncio.Task] = set()
+        self._connections: set[asyncio.StreamWriter] = set()
+        self._connection_tasks: set[asyncio.Task] = set()
+
+    async def start(self) -> None:
+        if self._direct_server is not None:
+            return
+        self._direct_server = await asyncio.start_server(
+            self._client_connected, "127.0.0.1", 0
+        )
+
+    def _client_connected(
+        self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter
+    ) -> asyncio.Task:
+        return self._track(self._serve(reader, writer))
+
+    def _track(self, coro: Awaitable[None]) -> asyncio.Task:
+        task = asyncio.ensure_future(coro)
+        self._connection_tasks.add(task)
+        task.add_done_callback(self._connection_tasks.discard)
+        return task
+
+    def endpoint(self, upstream: UpstreamProxy | None = None) -> ProxyConfig:
+        if upstream is None:
+            if self._direct_server is None:
+                raise RuntimeError("PinnedEgressProxy.start() must be called first")
+            if self._direct_endpoint is None:
+                port = self._direct_server.sockets[0].getsockname()[1]
+                self._direct_endpoint = ProxyConfig(
+                    server=f"http://127.0.0.1:{port}"
+                )
+            return self._direct_endpoint
+        if upstream not in self._upstream_endpoints:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            sock.bind(("127.0.0.1", 0))
+            sock.listen(128)
+            sock.setblocking(False)
+            port = sock.getsockname()[1]
+            task = asyncio.get_running_loop().create_task(
+                self._start_upstream_server(sock, upstream)
+            )
+            self._upstream_bind_tasks.add(task)
+            self._upstream_endpoints[upstream] = ProxyConfig(
+                server=f"http://127.0.0.1:{port}"
+            )
+        return self._upstream_endpoints[upstream]
+
+    async def _start_upstream_server(
+        self, sock: socket.socket, upstream: UpstreamProxy
+    ) -> None:
+        try:
+            server = await asyncio.start_server(
+                lambda reader, writer: self._track(
+                    self._serve(reader, writer, upstream)
+                ),
+                sock=sock,
+            )
+        except BaseException:
+            sock.close()
+            raise
+        self._upstream_servers[upstream] = server
+
+    async def close(self) -> None:
+        for task in list(self._upstream_bind_tasks):
+            task.cancel()
+        if self._upstream_bind_tasks:
+            await asyncio.gather(*self._upstream_bind_tasks, return_exceptions=True)
+        self._upstream_bind_tasks.clear()
+        servers = [self._direct_server, *self._upstream_servers.values()]
+        for server in servers:
+            if server is not None:
+                server.close()
+        for task in list(self._connection_tasks):
+            task.cancel()
+        if self._connection_tasks:
+            await asyncio.gather(*self._connection_tasks, return_exceptions=True)
+        self._connection_tasks.clear()
+        for server in servers:
+            if server is not None:
+                try:
+                    await server.wait_closed()
+                except Exception:
+                    pass
+        self._direct_server = None
+        self._upstream_servers.clear()
+        self._direct_endpoint = None
+        self._upstream_endpoints.clear()
+        for writer in list(self._connections):
+            try:
+                writer.close()
+            except Exception:
+                pass
+        self._connections.clear()
+
+    async def _open_direct_tunnel(self, host: str, port: int) -> tuple:
+        target = await self._policy.resolve(_connect_probe_url(host, port))
+        last_error: Exception | None = None
+        for address in target.addresses:
+            try:
+                return await self._dial(str(address), port)
+            except Exception as exc:
+                last_error = exc
+        raise OSError(f"all validated addresses failed: {last_error}") from last_error
+
+    async def _dial(self, host: str, port: int) -> tuple:
+        if self._connect is not None:
+            return await self._connect(host, port)
+        return await asyncio.open_connection(host, port)
+
+    async def _open_upstream_tunnel(
+        self, host: str, port: int, upstream: UpstreamProxy
+    ) -> tuple:
+        target = await self._policy.resolve(_connect_probe_url(host, port))
+        up_host, up_port, use_tls = _parse_upstream_server(upstream)
+        last_error: Exception | None = None
+        for address in target.addresses:
+            remote_writer: asyncio.StreamWriter | None = None
+            try:
+                remote_reader, remote_writer = await self._dial_upstream(
+                    up_host, up_port, use_tls
+                )
+                request = build_upstream_connect(str(address), port, upstream)
+                remote_writer.write(request)
+                await remote_writer.drain()
+                head = await self._read_head(remote_reader)
+                if head is None:
+                    raise OSError("upstream closed during CONNECT handshake")
+                status = int(head.split(b"\r\n", 1)[0].split(b" ", 2)[1])
+                if status == 200:
+                    return remote_reader, remote_writer
+                if status == 407:
+                    raise OSError("upstream proxy requires authentication")
+                raise OSError(f"upstream proxy rejected CONNECT with status {status}")
+            except Exception as exc:
+                last_error = exc
+                if remote_writer is not None:
+                    try:
+                        remote_writer.close()
+                    except Exception:
+                        pass
+                    try:
+                        await remote_writer.wait_closed()
+                    except Exception:
+                        pass
+        raise OSError(f"all validated addresses failed via upstream: {last_error}") from last_error
+
+    async def _dial_upstream(
+        self, host: str, port: int, use_tls: bool
+    ) -> tuple:
+        if self._connect is not None:
+            return await self._connect(host, port)
+        return await asyncio.open_connection(host, port, ssl=use_tls or None)
+
+    async def _serve(
+        self,
+        reader: asyncio.StreamReader,
+        writer: asyncio.StreamWriter,
+        upstream: UpstreamProxy | None = None,
+    ) -> None:
+        self._connections.add(writer)
+        try:
+            head = await self._read_head(reader, writer)
+            if head is None:
+                return
+            request_line, _, header_block = head.partition(b"\r\n")
+            parts = request_line.split(b" ")
+            if len(parts) != 3:
+                await self._reject(writer, 400, "bad request line")
+                return
+            method = parts[0].decode("latin-1")
+            target = parts[1].decode("latin-1")
+            if method.upper() == "CONNECT":
+                await self._handle_connect(
+                    target, header_block, reader, writer, upstream
+                )
+            else:
+                await self._handle_absolute_form(
+                    method, target, header_block, reader, writer, upstream
+                )
+        finally:
+            try:
+                writer.close()
+            except Exception:
+                pass
+            try:
+                await writer.wait_closed()
+            except Exception:
+                pass
+            self._connections.discard(writer)
+
+    async def _read_head(
+        self,
+        reader: asyncio.StreamReader,
+        writer: asyncio.StreamWriter | None = None,
+    ) -> bytes | None:
+        head = b""
+        while b"\r\n\r\n" not in head:
+            if len(head) > _MAX_HEADER_BYTES:
+                if writer is not None:
+                    await self._reject(writer, 431, "request header fields too large")
+                return None
+            remaining = _MAX_HEADER_BYTES + 1 - len(head)
+            chunk = await reader.read(min(4096, max(1, remaining)))
+            if not chunk:
+                return None
+            head += chunk
+        return head
+
+    async def _reject(self, writer: asyncio.StreamWriter, status: int, reason: str) -> None:
+        body = f"{status} {reason}".encode()
+        head = (
+            f"HTTP/1.1 {status} {reason}\r\n"
+            f"Content-Length: {len(body)}\r\n"
+            f"Connection: close\r\n\r\n"
+        ).encode()
+        try:
+            writer.write(head + body)
+            await writer.drain()
+        except Exception:
+            pass
+
+    async def _handle_connect(
+        self,
+        target: str,
+        header_block: bytes,
+        reader: asyncio.StreamReader,
+        writer: asyncio.StreamWriter,
+        upstream: UpstreamProxy | None,
+    ) -> None:
+        try:
+            try:
+                parts = urlsplit(f"//{target}")
+                host = parts.hostname
+                port = parts.port or 443
+            except ValueError as exc:
+                raise UrlPolicyError(
+                    UrlPolicyReason.INVALID_URL, target, str(exc)
+                ) from exc
+            if not host:
+                raise UrlPolicyError(
+                    UrlPolicyReason.MISSING_HOST, target, "CONNECT target has no host"
+                )
+            if host.startswith("[") and host.endswith("]"):
+                host = host[1:-1]
+            if upstream is None:
+                remote_reader, remote_writer = await self._open_direct_tunnel(host, port)
+            else:
+                remote_reader, remote_writer = await self._open_upstream_tunnel(
+                    host, port, upstream
+                )
+        except UrlPolicyError as exc:
+            await self._reject(writer, 403, str(exc))
+            return
+        except Exception as exc:
+            await self._reject(writer, 502, f"tunnel failed: {exc}")
+            return
+        try:
+            writer.write(b"HTTP/1.1 200 Connection established\r\n\r\n")
+            await writer.drain()
+        except Exception:
+            try:
+                remote_writer.close()
+            except Exception:
+                pass
+            return
+        await self._relay(reader, writer, remote_reader, remote_writer)
+
+    async def _handle_absolute_form(
+        self,
+        method: str,
+        target: str,
+        header_block: bytes,
+        reader: asyncio.StreamReader,
+        writer: asyncio.StreamWriter,
+        upstream: UpstreamProxy | None,
+    ) -> None:
+        try:
+            resolved = await self._policy.resolve(target)
+        except UrlPolicyError as exc:
+            await self._reject(writer, 403, str(exc))
+            return
+        parts = urlsplit(resolved.url.url)
+        origin_form = parts.path or "/"
+        if parts.query:
+            origin_form += f"?{parts.query}"
+        headers = self._parse_header_lines(header_block)
+        if not any(name.lower() == "host" for name, _value in headers):
+            headers.insert(0, ("Host", parts.netloc))
+        outgoing = self._build_request(method, origin_form, headers, upstream)
+        try:
+            if upstream is None:
+                remote_reader, remote_writer = await self._open_direct_tunnel(
+                    resolved.host, resolved.port
+                )
+            else:
+                up_host, up_port, use_tls = _parse_upstream_server(upstream)
+                remote_reader, remote_writer = await self._dial_upstream(
+                    up_host, up_port, use_tls
+                )
+            remote_writer.write(outgoing)
+            await remote_writer.drain()
+        except Exception as exc:
+            await self._reject(writer, 502, f"tunnel failed: {exc}")
+            return
+        await self._relay(reader, writer, remote_reader, remote_writer)
+
+    @staticmethod
+    def _parse_header_lines(header_block: bytes) -> list[tuple[str, str]]:
+        headers: list[tuple[str, str]] = []
+        for line in header_block.split(b"\r\n"):
+            if not line:
+                continue
+            name, _, value = line.partition(b":")
+            headers.append(
+                (name.decode("latin-1").strip(), value.decode("latin-1").strip())
+            )
+        return headers
+
+    @classmethod
+    def _build_request(
+        cls,
+        method: str,
+        origin_form: str,
+        headers: list[tuple[str, str]],
+        upstream: UpstreamProxy | None,
+    ) -> bytes:
+        lines = [f"{method} {origin_form} HTTP/1.1"]
+        for name, value in headers:
+            if name.lower() == "proxy-authorization":
+                continue
+            lines.append(f"{name}: {value}")
+        auth = _basic_auth(upstream) if upstream is not None else None
+        if auth is not None:
+            lines.append(f"Proxy-Authorization: {auth}")
+        return ("\r\n".join(lines) + "\r\n\r\n").encode("latin-1")
+
+    @staticmethod
+    async def _relay(
+        reader_a: asyncio.StreamReader,
+        writer_a: asyncio.StreamWriter,
+        reader_b: asyncio.StreamReader,
+        writer_b: asyncio.StreamWriter,
+    ) -> None:
+        async def _copy(src: asyncio.StreamReader, dst: asyncio.StreamWriter) -> None:
+            while True:
+                chunk = await src.read(65536)
+                if not chunk:
+                    return
+                dst.write(chunk)
+                await dst.drain()
+
+        task_a = asyncio.create_task(_copy(reader_a, writer_b))
+        task_b = asyncio.create_task(_copy(reader_b, writer_a))
+        try:
+            await asyncio.wait({task_a, task_b}, return_when=asyncio.FIRST_COMPLETED)
+        finally:
+            task_a.cancel()
+            task_b.cancel()
+            await asyncio.gather(task_a, task_b, return_exceptions=True)
+            for writer in (writer_a, writer_b):
+                try:
+                    writer.close()
+                except Exception:
+                    pass
+                try:
+                    await writer.wait_closed()
+                except Exception:
+                    pass

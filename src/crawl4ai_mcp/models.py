@@ -1,5 +1,7 @@
+from dataclasses import dataclass
 from enum import IntEnum, StrEnum
-from pydantic import BaseModel, Field
+
+from pydantic import BaseModel, Field, model_validator
 
 
 class Tier(IntEnum):
@@ -34,13 +36,57 @@ class FetchResult(BaseModel):
     url: str
     tier: Tier
     cost_kind: CostKind
-    status_code: int | None = None
+    target_status_code: int | None = None
+    provider_status_code: int | None = None
+    network_error: str | None = None
+    policy_error: str | None = None
     html: str = ""
     markdown: str | None = None
     headers: dict[str, str] = Field(default_factory=dict)
     redirected_url: str | None = None
     elapsed_ms: int
     error: str | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def _map_deprecated_status_code(cls, data: object) -> object:
+        if isinstance(data, dict) and "status_code" in data:
+            if "target_status_code" not in data:
+                data = {**data, "target_status_code": data["status_code"]}
+            data = {key: value for key, value in data.items() if key != "status_code"}
+        return data
+
+    @property
+    def status_code(self) -> int | None:
+        return self.target_status_code
+
+
+class AttemptResponse(BaseModel):
+    tier: str
+    decision: Decision
+    cost_kind: CostKind
+    status_code: int | None = None
+    elapsed_ms: int
+    error: str | None = None
+
+
+class ScrapeResponse(BaseModel):
+    url: str
+    status: str
+    content: str = ""
+    tier_used: str | None = None
+    cost_kind: CostKind | None = None
+    elapsed_ms: int
+    attempts: list[AttemptResponse] = Field(default_factory=list)
+    cooldown_until: int | None = None
+    error: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class ScrapeOutcome:
+    response: ScrapeResponse
+    raw_html: str | None
+    effective_url: str
 
 
 class ProviderAvailability(BaseModel):

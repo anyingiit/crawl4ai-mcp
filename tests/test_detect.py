@@ -6,7 +6,7 @@ from crawl4ai_mcp.models import CostKind, Decision, FetchResult, Tier
 def fetched(status: int, html: str, headers=None):
     return FetchResult(
         url="https://example.com", tier=Tier.HTTP, cost_kind=CostKind.FREE,
-        status_code=status, html=html, headers=headers or {}, elapsed_ms=1,
+        target_status_code=status, html=html, headers=headers or {}, elapsed_ms=1,
     )
 
 

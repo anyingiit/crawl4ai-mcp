@@ -18,12 +18,16 @@ def failed_result(
     error: str,
     started_at: float,
     status_code: int | None = None,
+    network_error: str | None = None,
+    policy_error: str | None = None,
 ) -> FetchResult:
     return FetchResult(
         url=url,
         tier=tier,
         cost_kind=cost_kind,
-        status_code=status_code,
+        target_status_code=status_code,
+        network_error=network_error,
+        policy_error=policy_error,
         error=error,
         elapsed_ms=int((time.monotonic() - started_at) * 1000),
     )
