@@ -1,3 +1,6 @@
+import asyncio
+import ipaddress
+
 import pytest
 from crawl4ai_mcp.cascade import CascadeEngine, CascadeInputError
 from crawl4ai_mcp.models import (
@@ -412,3 +415,198 @@ async def test_attempts_carry_full_metadata(engine_with_404):
     assert attempt.elapsed_ms == 5
     assert attempt.error is None
     assert outcome.response.error == "HTTP 404"
+
+
+class _FakeResult:
+    def __init__(self, html="<main>Hello</main>", error_message=None, success=True):
+        self.html = html
+        self.status_code = 200 if success else None
+        self.response_headers = {}
+        self.redirected_url = None
+        self.error_message = error_message
+        self.success = success
+
+
+class _FakeContainer:
+    def __init__(self, **kwargs):
+        self._results = [_FakeResult(**kwargs)]
+
+
+class _FakeCrawler:
+    def __init__(self, factory):
+        self.factory = factory
+        self.closed = False
+        self.configs = []
+
+    async def arun(self, url, config=None):
+        self.configs.append(config)
+        return self.factory.container_factory()
+
+    async def close(self):
+        self.closed = True
+        self.factory.closed += 1
+
+
+class _FakeCrawlerFactory:
+    def __init__(self, container_factory):
+        self.created = 0
+        self.closed = 0
+        self.container_factory = container_factory
+
+    def __call__(self):
+        self.created += 1
+        return _FakeCrawler(self)
+
+
+class _FakeEgressProxy:
+    def endpoint(self, upstream=None):
+        from crawl4ai.async_configs import ProxyConfig
+
+        return ProxyConfig(server="http://127.0.0.1:41000")
+
+
+class _FakeGuard:
+    def __init__(self):
+        self._blocked = []
+
+    async def install(self, context):
+        pass
+
+    def blocked_marker(self):
+        return len(self._blocked)
+
+    def blocked_since(self, marker):
+        return self._blocked[marker:]
+
+
+def make_browser_provider(container_factory, guard=None):
+    from crawl4ai_mcp.providers.browser import BrowserProvider
+
+    return BrowserProvider(
+        tier=Tier.STEALTH,
+        idle_seconds=180,
+        semaphore=asyncio.Semaphore(2),
+        egress_proxy=_FakeEgressProxy(),
+        request_guard=guard or _FakeGuard(),
+        factory=_FakeCrawlerFactory(container_factory),
+    )
+
+
+@pytest.mark.asyncio
+async def test_returned_browser_network_failure_never_reaches_paid_tiers(tmp_path):
+    from crawl4ai_mcp.egress import BrowserRequestGuard, UrlPolicy
+
+    async def resolver(_host, _port):
+        return [ipaddress.ip_address("93.184.216.34")]
+
+    guard = BrowserRequestGuard(UrlPolicy(resolver))
+    provider = make_browser_provider(
+        lambda: _FakeContainer(
+            error_message=(
+                "Failed on navigating ACS-GOTO:\n"
+                "net::ERR_CONNECTION_RESET at https://flaky.example/"
+            ),
+            success=False,
+        ),
+        guard=guard,
+    )
+    paid_calls = []
+    providers = {
+        Tier.STEALTH: provider,
+        Tier.RAYOBYTE: ScriptedProvider(
+            Tier.RAYOBYTE,
+            lambda url, tier: paid_calls.append(tier) or success(url, tier),
+        ),
+        Tier.FIRECRAWL: ScriptedProvider(
+            Tier.FIRECRAWL,
+            lambda url, tier: paid_calls.append(tier) or success(url, tier),
+        ),
+    }
+    policy = await PolicyStore.open(tmp_path / "policy.db")
+    engine = CascadeEngine(providers, policy, threshold=200, clock=FakeClock(1000))
+    try:
+        outcome = await engine.scrape("https://flaky.example/", force=Tier.STEALTH)
+        assert [attempt.tier for attempt in outcome.response.attempts] == [
+            "stealth", "stealth",
+        ]
+        assert outcome.response.attempts[-1].decision == Decision.TARGET_NETWORK
+        assert paid_calls == []
+        assert outcome.response.status == "failed"
+    finally:
+        await provider.close()
+        await policy.close()
+
+
+@pytest.mark.asyncio
+async def test_public_to_private_browser_redirect_is_policy_error_without_paid_tiers(
+    tmp_path,
+):
+    from crawl4ai_mcp.egress import BrowserRequestGuard, UrlPolicy
+
+    async def resolver(host, _port):
+        if host == "private.example":
+            return [ipaddress.ip_address("10.0.0.5")]
+        return [ipaddress.ip_address("93.184.216.34")]
+
+    guard = BrowserRequestGuard(UrlPolicy(resolver))
+
+    async def blocked_arun(self, url, config=None):
+        from crawl4ai_mcp.egress import BrowserRequestGuard
+
+        route = _FakeRoute()
+        request = _FakeNavigationRequest("https://private.example/secret")
+        await guard.handle(route, request)
+        assert route.aborted and not route.fell_back
+        return _FakeContainer(
+            error_message="Navigation to https://private.example/secret was aborted",
+            success=False,
+        )
+
+    provider = make_browser_provider(lambda: _FakeContainer(), guard=guard)
+    paid_calls = []
+    providers = {
+        Tier.STEALTH: provider,
+        Tier.RAYOBYTE: ScriptedProvider(
+            Tier.RAYOBYTE,
+            lambda url, tier: paid_calls.append(tier) or success(url, tier),
+        ),
+        Tier.FIRECRAWL: ScriptedProvider(
+            Tier.FIRECRAWL,
+            lambda url, tier: paid_calls.append(tier) or success(url, tier),
+        ),
+    }
+    policy = await PolicyStore.open(tmp_path / "policy.db")
+    engine = CascadeEngine(providers, policy, threshold=200, clock=FakeClock(1000))
+    original_arun = _FakeCrawler.arun
+    _FakeCrawler.arun = blocked_arun
+    try:
+        outcome = await engine.scrape("https://example.com/start", force=Tier.STEALTH)
+        assert outcome.response.attempts[-1].decision == Decision.POLICY_REJECTED
+        assert paid_calls == []
+        assert outcome.response.status == "failed"
+        assert outcome.response.cooldown_until is None
+        assert await policy.list_policies() == []
+    finally:
+        _FakeCrawler.arun = original_arun
+        await provider.close()
+        await policy.close()
+
+
+class _FakeRoute:
+    def __init__(self):
+        self.fell_back = False
+        self.aborted = False
+
+    async def fallback(self):
+        self.fell_back = True
+
+    async def abort(self, _reason="blockedbyclient"):
+        self.aborted = True
+
+
+class _FakeNavigationRequest:
+    def __init__(self, url):
+        self.url = url
+
+    def is_navigation_request(self):
+        return True

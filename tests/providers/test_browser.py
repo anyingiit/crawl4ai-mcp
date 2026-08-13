@@ -37,6 +37,7 @@ class FakeRoute:
 class FakeRequest:
     def __init__(self, url: str):
         self.url = url
+        self.is_navigation_request = lambda: False
 
 
 class FakeRouteContext:
@@ -82,9 +83,16 @@ class FakePinnedProxy:
 class FakeRequestGuard:
     def __init__(self):
         self.contexts = []
+        self._blocked = []
 
     async def install(self, context):
         self.contexts.append(context)
+
+    def blocked_marker(self):
+        return len(self._blocked)
+
+    def blocked_since(self, marker):
+        return self._blocked[marker:]
 
 
 class FakeClock:
@@ -99,17 +107,28 @@ class FakeClock:
 
 
 class FakeResult:
-    def __init__(self, html: str = "<main>Hello</main>"):
+    def __init__(
+        self,
+        html: str = "<main>Hello</main>",
+        error_message: str | None = None,
+        success: bool = True,
+    ):
         self.html = html
-        self.status_code = 200
+        self.status_code = 200 if success else None
         self.response_headers = {"content-type": "text/html"}
         self.redirected_url = None
-        self.error_message = None
+        self.error_message = error_message
+        self.success = success
 
 
 class FakeContainer:
-    def __init__(self, html: str = "<main>Hello</main>"):
-        self._results = [FakeResult(html)]
+    def __init__(
+        self,
+        html: str = "<main>Hello</main>",
+        error_message: str | None = None,
+        success: bool = True,
+    ):
+        self._results = [FakeResult(html, error_message, success)]
 
 
 class FakeCrawler:
@@ -659,6 +678,152 @@ async def test_bare_playwright_timeout_from_arun_is_not_network_error(fake_clock
         result = await provider.fetch("https://slow.example/")
         assert result.network_error is None
         assert result.error is not None
+    finally:
+        FakeCrawler.arun = original_arun
+        await provider.close()
+
+
+@pytest.mark.asyncio
+async def test_returned_result_network_failure_is_classified(fake_clock):
+    factory = FakeCrawlerFactory()
+    provider = BrowserProvider(
+        tier=Tier.STEALTH, factory=factory, idle_seconds=180,
+        semaphore=asyncio.Semaphore(2), clock=fake_clock,
+        egress_proxy=FakePinnedProxy(), request_guard=FakeRequestGuard(),
+    )
+    original_arun = FakeCrawler.arun
+
+    async def failing_arun(self, url, config=None):
+        self.configs.append(config)
+        return FakeContainer(
+            error_message=(
+                "Failed on navigating ACS-GOTO:\n"
+                "net::ERR_NAME_NOT_RESOLVED at https://nonexistent.example/"
+            ),
+            success=False,
+        )
+
+    FakeCrawler.arun = failing_arun
+    try:
+        result = await provider.fetch("https://nonexistent.example/")
+        assert result.network_error is not None
+        assert result.target_status_code is None
+    finally:
+        FakeCrawler.arun = original_arun
+        await provider.close()
+
+
+@pytest.mark.asyncio
+async def test_returned_result_network_timeout_is_classified(fake_clock):
+    factory = FakeCrawlerFactory()
+    provider = BrowserProvider(
+        tier=Tier.STEALTH, factory=factory, idle_seconds=180,
+        semaphore=asyncio.Semaphore(2), clock=fake_clock,
+        egress_proxy=FakePinnedProxy(), request_guard=FakeRequestGuard(),
+    )
+    original_arun = FakeCrawler.arun
+
+    async def timeout_arun(self, url, config=None):
+        self.configs.append(config)
+        return FakeContainer(
+            error_message="Failed on navigating ACS-GOTO:\nTimeout 60000ms exceeded.",
+            success=False,
+        )
+
+    FakeCrawler.arun = timeout_arun
+    try:
+        result = await provider.fetch("https://slow.example/")
+        assert result.network_error is not None
+    finally:
+        FakeCrawler.arun = original_arun
+        await provider.close()
+
+
+@pytest.mark.asyncio
+async def test_returned_result_launch_error_is_not_network_or_policy(fake_clock):
+    factory = FakeCrawlerFactory()
+    provider = BrowserProvider(
+        tier=Tier.STEALTH, factory=factory, idle_seconds=180,
+        semaphore=asyncio.Semaphore(2), clock=fake_clock,
+        egress_proxy=FakePinnedProxy(), request_guard=FakeRequestGuard(),
+    )
+    original_arun = FakeCrawler.arun
+
+    async def failed_arun(self, url, config=None):
+        self.configs.append(config)
+        return FakeContainer(
+            error_message="Executable doesn't exist at /usr/lib/chromium/chrome",
+            success=False,
+        )
+
+    FakeCrawler.arun = failed_arun
+    try:
+        result = await provider.fetch("https://example.com/")
+        assert result.network_error is None
+        assert result.policy_error is None
+        assert result.error is not None
+    finally:
+        FakeCrawler.arun = original_arun
+        await provider.close()
+
+
+@pytest.mark.asyncio
+async def test_returned_result_with_blocked_main_frame_redirect_is_policy_error(fake_clock):
+    guard = BrowserRequestGuard(public_policy())
+    factory = FakeCrawlerFactory()
+    provider = BrowserProvider(
+        tier=Tier.STEALTH, factory=factory, idle_seconds=180,
+        semaphore=asyncio.Semaphore(2), clock=fake_clock,
+        egress_proxy=FakePinnedProxy(), request_guard=guard,
+    )
+    original_arun = FakeCrawler.arun
+
+    async def aborted_arun(self, url, config=None):
+        self.configs.append(config)
+        route = FakeRoute()
+        request = FakeRequest("https://10.0.0.5/secret")
+        request.is_navigation_request = lambda: True
+        await guard.handle(route, request)
+        assert route.aborted and not route.fell_back
+        return FakeContainer(
+            error_message="Navigation to https://10.0.0.5/secret was aborted",
+            success=False,
+        )
+
+    FakeCrawler.arun = aborted_arun
+    try:
+        result = await provider.fetch("https://example.com/start")
+        assert result.policy_error == "non_global_address"
+        assert result.network_error is None
+    finally:
+        FakeCrawler.arun = original_arun
+        await provider.close()
+
+
+@pytest.mark.asyncio
+async def test_aborted_subresource_alone_is_not_main_frame_policy_error(fake_clock):
+    guard = BrowserRequestGuard(public_policy())
+    factory = FakeCrawlerFactory()
+    provider = BrowserProvider(
+        tier=Tier.STEALTH, factory=factory, idle_seconds=180,
+        semaphore=asyncio.Semaphore(2), clock=fake_clock,
+        egress_proxy=FakePinnedProxy(), request_guard=guard,
+    )
+    original_arun = FakeCrawler.arun
+
+    async def subresource_arun(self, url, config=None):
+        self.configs.append(config)
+        route = FakeRoute()
+        request = FakeRequest("https://10.0.0.5/tracker.js")
+        await guard.handle(route, request)
+        assert route.aborted
+        return FakeContainer()
+
+    FakeCrawler.arun = subresource_arun
+    try:
+        result = await provider.fetch("https://example.com/")
+        assert result.policy_error is None
+        assert result.target_status_code == 200
     finally:
         FakeCrawler.arun = original_arun
         await provider.close()

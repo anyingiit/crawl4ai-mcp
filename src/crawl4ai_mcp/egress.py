@@ -263,6 +263,17 @@ class BrowserRequestGuard:
         self._policy = policy
         self._installed = weakref.WeakSet()
         self._inflight: weakref.WeakKeyDictionary = weakref.WeakKeyDictionary()
+        self._blocked_navigations: list[tuple[str, str]] = []
+
+    def blocked_marker(self) -> int:
+        """Monotonic marker of the current blocked-navigation log length."""
+        return len(self._blocked_navigations)
+
+    def blocked_since(self, marker: int) -> list[tuple[str, str]]:
+        """(url, reason) pairs of main-frame navigations blocked after marker."""
+        if marker >= len(self._blocked_navigations):
+            return []
+        return self._blocked_navigations[marker:]
 
     async def install(self, context) -> None:
         pending = self._inflight.get(context)
@@ -290,7 +301,10 @@ class BrowserRequestGuard:
     async def handle(self, route, request) -> None:
         try:
             await self._policy.resolve(request.url)
-        except UrlPolicyError:
+        except UrlPolicyError as exc:
+            is_navigation = getattr(request, "is_navigation_request", None)
+            if callable(is_navigation) and is_navigation():
+                self._blocked_navigations.append((request.url, exc.reason.value))
             await route.abort()
         else:
             await route.fallback()
