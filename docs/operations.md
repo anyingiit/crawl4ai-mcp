@@ -133,7 +133,7 @@ RAYOBYTE_API_URL=https://api.scraping.rayobyte.com/
 RAYOBYTE_API_KEY=
 FIRECRAWL_API_KEY=
 WEBSHARE_PROXIES=
-OXYLABS_PROXIES=http://user-<user>-country-US:<password>@dc.oxylabs.io:8000
+OXYLABS_PROXIES=http://dc.oxylabs.io:8000
 ```
 
 修改后：
@@ -144,6 +144,7 @@ systemctl --user restart crawl4ai-mcp.service
 ```
 
 - 代理列表用逗号分隔，逐条轮转（PROXY 层）。
+- 代理 URL 只接受 `http/https`，不得含 userinfo/path/query/fragment；上游代理凭据按已验证的契约应走显式字段（`UpstreamProxy.username/password`），当前部署尚无凭据注入通道，带认证的代理池暂不可用（见 2026-08-13 二次修复报告残留项）。
 - 密钥留空 = 该提供商不可用（`diagnose` 中 ready=false），服务照常启动。
 - 更换密钥后旧的失效即可，无需清理策略库。
 
