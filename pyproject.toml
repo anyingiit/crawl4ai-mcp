@@ -32,4 +32,6 @@ asyncio_mode = "auto"
 testpaths = ["tests"]
 markers = [
   "live: network-backed tests; opt in with CRAWL4AI_MCP_LIVE_TESTS=1",
+  "acceptance_required: must pass for complete deployment acceptance",
+  "acceptance_optional: may skip only when the provider is disabled or unconfigured",
 ]

@@ -27,3 +27,13 @@ note = "2026-08-13: deterministic 403 Cloudflare-style block; classifies as CLOU
 url = "https://httpbingo.org/status/500"
 marker = ""
 note = "2026-08-13: deterministic 500 with no retry-after; classifies as FAILED and triggers cooldown. httpstat.us is unreachable (empty reply) and was abandoned."
+
+[unreachable_public]
+url = "http://192.88.99.1/"
+marker = ""
+note = "2026-08-13: deprecated 6to4 anycast address (RFC 7526). ipaddress.is_global() is true, so the URL policy admits it; no service listens on port 80, so the fetch fails by connection refusal within ~200 ms. Proves a target-network failure never reaches paid tiers."
+
+[proxy_ip_check]
+url = "https://api.ipify.org?format=json"
+marker = "\"ip\"\\s*:\\s*\"[0-9.]+\\s*\""
+note = "2026-08-13: marker is a regex matched against the JSON body; asserts the proxied response is the real IP endpoint, not an error page."

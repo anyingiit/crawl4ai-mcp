@@ -60,16 +60,50 @@ cp .env.example .env && chmod 600 .env      # 填入密钥（见 .env.example）
 ## 资源护栏
 
 - 仅监听 `127.0.0.1:11236`，拒绝其他 bind host
-- cgroup 硬限：`MemoryHigh=1536M`、`MemoryMax=2560M`、`MemorySwapMax=0`（OOM 时由 cgroup 击杀并自动重启，不波及整机）
+- cgroup 硬限：`MemoryHigh=1536M`、`MemoryMax=2560M`、`MemorySwapMax=0`（OOM 时由 cgroup 击杀并自动重启，不波及整机）；`KillMode=control-group`、`Restart=always`
 - 浏览器并发 = 2，HTTP 并发 = 8；Chromium 空闲 180 秒、Camoufox 空闲 120 秒即完全回收，稳态内存约 80-100 MiB
+
+## 出口安全（egress）
+
+- 只允许 `http/https` 公共地址：私网、回环（127.0.0.1 等）、链路本地、文档段（TEST-NET）一律 `non_global_address` 拒绝；`file://` 等非 HTTP scheme 直接 `unsupported_scheme` 拒绝；含 userinfo、非常规端口、IPv6 zone id、控制字符的 URL 同样拒绝
+- 域名每次请求都做全量 DNS 解析并逐地址校验（防 DNS rebinding）；HTTP 层用 `CurlOpt.RESOLVE` 把解析结果钉住再发包，重定向逐跳重新解析校验（curl 关闭自动跳转，手动跟随并复核）
+- 浏览器子资源（`**/*`）与 crawl4ai seeder 流量同样走 URL 策略，非公共地址一律 abort
+- 同源判断比较规范化后的 scheme/host/有效端口；重定向逃逸同源范围即拒绝
+
+## 提供商模型与失败语义
+
+- 未配置 = 不可用：密钥/代理留空时 `diagnose` 中对应层 `ready=false`，级联直接跳过该层
+- 已配置但失败 = 真失败：不静默跳过；额度耗尽（Rayobyte 429/额度错误、Firecrawl 402）归一化为 `quota` 类错误，级联继续尝试或返回失败并进入域名冷却
+- 提供商失败枚举：`auth` / `quota` / `rate_limit` / `transport` / `service` / `malformed_response`，随 attempts 逐条记录 `provider_error_kind` 与 `provider_error`
+- 目标网络错误（连接拒绝/超时）只同层重试一次即停止（`target_network` 冷却），绝不自动升级到付费层
+- Cloudflare 挑战一旦出现即粘性跳过 PROXY 层（本次请求内永久过滤）
+- Tier 4（proxy）每次抓取独立构造 `proxy_config` 轮转，不跨请求共享
+
+## MCP 契约（响应形状）
+
+- 七个层级名一律小写字符串：`http` / `stealth` / `undetected` / `camoufox` / `proxy` / `rayobyte` / `firecrawl`
+- `scrape` 返回 `{url, status, content, tier_used, cost_kind, elapsed_ms, attempts, cooldown_until, error}`，`format` 仅 `markdown`（默认）或 `html`（仅成功时返回原始 HTML，失败置空）
+- `crawl` 返回 `{pages, stats}`；`map` 返回 `{urls}`（limit 1..100，超出拒绝）；`diagnose` 返回 `{rss_bytes, providers, browsers, recent_failures, domain_policies}`
+- 恰好四个工具：`scrape` / `crawl` / `map` / `diagnose`；raw HTML 始终内部持有，除非显式请求 html 格式
 
 ## 测试
 
 ```bash
-.venv/bin/pytest -v                          # 单元/集成
-CRAWL4AI_MCP_LIVE_TESTS=1 .venv/bin/pytest tests/acceptance/test_live_tiers.py -v        # 真实层级（耗额度）
-CRAWL4AI_MCP_LIVE_TESTS=1 .venv/bin/pytest tests/acceptance/test_resource_lifecycle.py -v # 内存/浏览器生命周期（约 10 分钟）
+.venv/bin/pytest -v                          # 单元/集成（非 live）
+.venv/bin/pytest tests/deployment/test_unit_file.py -v   # systemd 契约
+CRAWL4AI_MCP_LIVE_TESTS=1 scripts/run-acceptance.sh      # 完整部署验收（付费层需要配置）
 ```
+
+完整验收命令（Step 9）需要显式 opt-in（`CRAWL4AI_MCP_LIVE_TESTS=1`），跑 `tests/acceptance` 全部用例、落 JUnit/日志证据，并按此判定：
+
+| 退出码 | 含义 |
+|---|---|
+| 0 | `acceptance complete`：零失败/错误/跳过 |
+| 1 | `acceptance failed`：至少一个失败或错误 |
+| 2 | 未 opt-in 或环境不可用 |
+| 3 | `acceptance incomplete`：无失败但存在跳过（例如未配置的付费/可选层） |
+
+已配置的提供商（Camoufox/代理/Rayobyte/Firecrawl）失败不再跳过；只有禁用/未配置的可选层才允许跳过。资源生命周期用例约需 10 分钟（5 分钟空闲 + 4 分钟回收 + 重启自愈）。
 
 ## 文档
 
