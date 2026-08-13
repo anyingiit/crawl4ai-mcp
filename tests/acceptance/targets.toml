@@ -1,0 +1,14 @@
+# Reproducible acceptance targets.
+# Markers are the exact strings observed with a real browser on 2026-08-13.
+# If a fixture contract changes upstream, update the marker and the dated note
+# rather than silently switching sites.
+
+[js_links]
+url = "https://web-scraping.dev/js-links"
+marker = "/js-links-target"
+note = "2026-08-13: JS-injected anchor observed via crawl4ai stealth tier"
+
+[antibot_easy]
+url = "https://web-scraping.dev/antibot/easy"
+marker = ""
+note = "2026-08-13: to be recorded by a real browser in Task 8"
