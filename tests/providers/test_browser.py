@@ -34,10 +34,21 @@ class FakeRoute:
         self.aborted = True
 
 
+class FakeFrame:
+    def __init__(self, page):
+        self.page = page
+
+
+class FakePage:
+    def __init__(self, main_frame=None):
+        self.main_frame = main_frame
+
+
 class FakeRequest:
-    def __init__(self, url: str):
+    def __init__(self, url: str, frame=None, navigation: bool = False):
         self.url = url
-        self.is_navigation_request = lambda: False
+        self.frame = frame
+        self.is_navigation_request = lambda: navigation
 
 
 class FakeRouteContext:
@@ -83,16 +94,29 @@ class FakePinnedProxy:
 class FakeRequestGuard:
     def __init__(self):
         self.contexts = []
-        self._blocked = []
+        self.recorders = []
 
     async def install(self, context):
         self.contexts.append(context)
 
-    def blocked_marker(self):
-        return len(self._blocked)
+    def begin_fetch(self):
+        recorder = _FakeRecorder()
+        self.recorders.append(recorder)
+        return recorder
 
-    def blocked_since(self, marker):
-        return self._blocked[marker:]
+    def bind_page(self, page):
+        pass
+
+
+class _FakeRecorder:
+    def __init__(self):
+        self._events = []
+
+    def blocked(self):
+        return list(self._events)
+
+    def close(self):
+        pass
 
 
 class FakeClock:
@@ -496,6 +520,259 @@ async def test_browser_guard_install_cancel_does_not_cancel_shared_registration(
     assert context.route_calls == 1
 
 
+async def _run_blocked_fetch(guard, page, url):
+    recorder = guard.begin_fetch()
+    frame = FakeFrame(page)
+    page.main_frame = frame
+    guard.bind_page(page)
+    route = FakeRoute()
+    request = FakeRequest(url, frame=frame, navigation=True)
+    await guard.handle(route, request)
+    assert route.aborted and not route.fell_back
+    blocked = recorder.blocked()
+    recorder.close()
+    return blocked
+
+
+@pytest.mark.asyncio
+async def test_guard_recorders_are_request_scoped():
+    guard = BrowserRequestGuard(public_policy())
+    page_a = FakePage()
+    page_b = FakePage()
+    results = await asyncio.gather(
+        _run_blocked_fetch(guard, page_a, "https://10.0.0.5/secret-a"),
+        _run_blocked_fetch(guard, page_b, "https://10.0.0.5/secret-b"),
+    )
+    assert results[0] == [("https://10.0.0.5/secret-a", "non_global_address")]
+    assert results[1] == [("https://10.0.0.5/secret-b", "non_global_address")]
+
+
+@pytest.mark.asyncio
+async def test_guard_recorders_are_removed_after_close():
+    guard = BrowserRequestGuard(public_policy())
+    recorder = guard.begin_fetch()
+    page = FakePage()
+    guard.bind_page(page)
+    assert guard._pages
+    assert guard._by_task
+    recorder.close()
+    assert guard._pages == {}
+    assert guard._by_task == {}
+
+
+@pytest.mark.asyncio
+async def test_guard_does_not_record_blocked_subresource_on_bound_page():
+    guard = BrowserRequestGuard(public_policy())
+    recorder = guard.begin_fetch()
+    page = FakePage()
+    frame = FakeFrame(page)
+    page.main_frame = frame
+    guard.bind_page(page)
+    route = FakeRoute()
+    request = FakeRequest("https://10.0.0.5/tracker.js", frame=frame, navigation=False)
+    await guard.handle(route, request)
+    assert route.aborted and not route.fell_back
+    assert recorder.blocked() == []
+    recorder.close()
+
+
+@pytest.mark.asyncio
+async def test_guard_does_not_record_blocked_subframe_navigation():
+    guard = BrowserRequestGuard(public_policy())
+    recorder = guard.begin_fetch()
+    page = FakePage()
+    subframe = FakeFrame(page)
+    page.main_frame = FakeFrame(page)
+    guard.bind_page(page)
+    route = FakeRoute()
+    request = FakeRequest("https://10.0.0.5/frame", frame=subframe, navigation=True)
+    await guard.handle(route, request)
+    assert route.aborted and not route.fell_back
+    assert recorder.blocked() == []
+    recorder.close()
+
+
+@pytest.mark.asyncio
+async def test_concurrent_browser_fetches_never_cross_attribute_blocked_navigation(fake_clock):
+    guard = BrowserRequestGuard(public_policy())
+    factory = FakeCrawlerFactory()
+    provider = BrowserProvider(
+        tier=Tier.STEALTH, factory=factory, idle_seconds=180,
+        semaphore=asyncio.Semaphore(2), clock=fake_clock,
+        egress_proxy=FakePinnedProxy(), request_guard=guard,
+    )
+    blocked_seen = asyncio.Event()
+    page_a = FakePage()
+    page_b = FakePage()
+    frame_a = FakeFrame(page_a)
+    frame_b = FakeFrame(page_b)
+    page_a.main_frame = frame_a
+    page_b.main_frame = frame_b
+    original_arun = FakeCrawler.arun
+
+    async def blocked_arun_a(self, url, config=None):
+        self.configs.append(config)
+        guard.bind_page(page_a)
+        route = FakeRoute()
+        request = FakeRequest("https://10.0.0.5/secret", frame=frame_a, navigation=True)
+        await guard.handle(route, request)
+        blocked_seen.set()
+        return FakeContainer(
+            error_message="navigation to blocked address aborted", success=False
+        )
+
+    async def generic_failure_arun_b(self, url, config=None):
+        self.configs.append(config)
+        guard.bind_page(page_b)
+        await blocked_seen.wait()
+        return FakeContainer(error_message="scrape pipeline crashed", success=False)
+
+    async def dispatch_arun(self, url, config=None):
+        if url == "https://example.com/a":
+            return await blocked_arun_a(self, url, config)
+        return await generic_failure_arun_b(self, url, config)
+
+    FakeCrawler.arun = dispatch_arun
+    try:
+        task_a = asyncio.create_task(provider.fetch("https://example.com/a"))
+        task_b = asyncio.create_task(provider.fetch("https://example.com/b"))
+        result_a, result_b = await asyncio.gather(task_a, task_b)
+        assert result_a.policy_error == "non_global_address"
+        assert result_a.network_error is None
+        assert result_b.policy_error is None
+    finally:
+        FakeCrawler.arun = original_arun
+        await provider.close()
+
+
+@pytest.mark.asyncio
+async def test_concurrent_same_url_fetches_never_cross_attribute_blocked_navigation(fake_clock):
+    guard = BrowserRequestGuard(public_policy())
+    factory = FakeCrawlerFactory()
+    provider = BrowserProvider(
+        tier=Tier.STEALTH, factory=factory, idle_seconds=180,
+        semaphore=asyncio.Semaphore(2), clock=fake_clock,
+        egress_proxy=FakePinnedProxy(), request_guard=guard,
+    )
+    blocked_seen = asyncio.Event()
+    page_a = FakePage()
+    page_b = FakePage()
+    frame_a = FakeFrame(page_a)
+    frame_b = FakeFrame(page_b)
+    page_a.main_frame = frame_a
+    page_b.main_frame = frame_b
+    original_arun = FakeCrawler.arun
+
+    async def blocked_arun_a(self, url, config=None):
+        self.configs.append(config)
+        guard.bind_page(page_a)
+        route = FakeRoute()
+        request = FakeRequest("https://10.0.0.5/secret", frame=frame_a, navigation=True)
+        await guard.handle(route, request)
+        blocked_seen.set()
+        return FakeContainer(
+            error_message="navigation to blocked address aborted", success=False
+        )
+
+    async def generic_failure_arun_b(self, url, config=None):
+        self.configs.append(config)
+        guard.bind_page(page_b)
+        await blocked_seen.wait()
+        return FakeContainer(error_message="scrape pipeline crashed", success=False)
+
+    async def dispatch_arun(self, url, config=None):
+        if asyncio.current_task() is task_a:
+            guard.bind_page(page_a)
+            route = FakeRoute()
+            request = FakeRequest("https://10.0.0.5/secret", frame=frame_a, navigation=True)
+            await guard.handle(route, request)
+            blocked_seen.set()
+            return FakeContainer(
+                error_message="navigation to blocked address aborted", success=False
+            )
+        guard.bind_page(page_b)
+        await blocked_seen.wait()
+        return FakeContainer(error_message="scrape pipeline crashed", success=False)
+
+    FakeCrawler.arun = dispatch_arun
+    try:
+        url = "https://example.com/same"
+        task_a = asyncio.create_task(provider.fetch(url))
+        task_b = asyncio.create_task(provider.fetch(url))
+        result_a, result_b = await asyncio.gather(task_a, task_b)
+        assert result_a.policy_error == "non_global_address"
+        assert result_a.network_error is None
+        assert result_b.policy_error is None
+    finally:
+        FakeCrawler.arun = original_arun
+        await provider.close()
+
+
+@pytest.mark.asyncio
+async def test_fetch_recorders_cleaned_up_on_success(fake_clock):
+    guard = BrowserRequestGuard(public_policy())
+    factory = FakeCrawlerFactory()
+    provider = BrowserProvider(
+        tier=Tier.STEALTH, factory=factory, idle_seconds=180,
+        semaphore=asyncio.Semaphore(2), clock=fake_clock,
+        egress_proxy=FakePinnedProxy(), request_guard=guard,
+    )
+    result = await provider.fetch("https://example.com/")
+    assert result.target_status_code == 200
+    assert guard._pages == {}
+    assert guard._by_task == {}
+    await provider.close()
+    assert guard._pages == {}
+    assert guard._by_task == {}
+
+
+@pytest.mark.asyncio
+async def test_fetch_recorders_cleaned_up_on_arun_error(fake_clock):
+    guard = BrowserRequestGuard(public_policy())
+    factory = FakeCrawlerFactory()
+    provider = BrowserProvider(
+        tier=Tier.STEALTH, factory=factory, idle_seconds=180,
+        semaphore=asyncio.Semaphore(2), clock=fake_clock,
+        egress_proxy=FakePinnedProxy(), request_guard=guard,
+    )
+    original_arun = FakeCrawler.arun
+
+    async def exploding_arun(self, url, config=None):
+        raise RuntimeError("Executable doesn't exist at /usr/lib/chromium/chrome")
+
+    FakeCrawler.arun = exploding_arun
+    try:
+        result = await provider.fetch("https://example.com/")
+        assert result.error is not None
+        assert guard._pages == {}
+        assert guard._by_task == {}
+    finally:
+        FakeCrawler.arun = original_arun
+        await provider.close()
+
+
+@pytest.mark.asyncio
+async def test_fetch_recorders_cleaned_up_on_cancellation(fake_clock, gate):
+    guard = BrowserRequestGuard(public_policy())
+    factory = FakeCrawlerFactory(gate=gate)
+    provider = BrowserProvider(
+        tier=Tier.STEALTH, factory=factory, idle_seconds=180,
+        semaphore=asyncio.Semaphore(2), clock=fake_clock,
+        egress_proxy=FakePinnedProxy(), request_guard=guard,
+    )
+    fetch = asyncio.create_task(provider.fetch("https://example.com/slow"))
+    await factory.started.wait()
+    fetch.cancel()
+    try:
+        await fetch
+        raise AssertionError("fetch was not cancelled")
+    except asyncio.CancelledError:
+        pass
+    assert guard._pages == {}
+    assert guard._by_task == {}
+    await provider.close()
+
+
 @pytest.mark.asyncio
 async def test_proxy_provider_rotates_on_consecutive_fetches_without_reap(fake_clock):
     factory = FakeCrawlerFactory()
@@ -777,12 +1054,15 @@ async def test_returned_result_with_blocked_main_frame_redirect_is_policy_error(
         egress_proxy=FakePinnedProxy(), request_guard=guard,
     )
     original_arun = FakeCrawler.arun
+    page = FakePage()
+    frame = FakeFrame(page)
+    page.main_frame = frame
 
     async def aborted_arun(self, url, config=None):
         self.configs.append(config)
+        guard.bind_page(page)
         route = FakeRoute()
-        request = FakeRequest("https://10.0.0.5/secret")
-        request.is_navigation_request = lambda: True
+        request = FakeRequest("https://10.0.0.5/secret", frame=frame, navigation=True)
         await guard.handle(route, request)
         assert route.aborted and not route.fell_back
         return FakeContainer(
@@ -810,11 +1090,15 @@ async def test_aborted_subresource_alone_is_not_main_frame_policy_error(fake_clo
         egress_proxy=FakePinnedProxy(), request_guard=guard,
     )
     original_arun = FakeCrawler.arun
+    page = FakePage()
+    frame = FakeFrame(page)
+    page.main_frame = frame
 
     async def subresource_arun(self, url, config=None):
         self.configs.append(config)
+        guard.bind_page(page)
         route = FakeRoute()
-        request = FakeRequest("https://10.0.0.5/tracker.js")
+        request = FakeRequest("https://10.0.0.5/tracker.js", frame=frame, navigation=False)
         await guard.handle(route, request)
         assert route.aborted
         return FakeContainer()

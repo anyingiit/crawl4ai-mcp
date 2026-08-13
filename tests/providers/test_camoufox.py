@@ -1,11 +1,46 @@
 import asyncio
+import ipaddress
 
 import pytest
 from crawl4ai.async_configs import ProxyConfig
 from playwright._impl._errors import TimeoutError as PlaywrightTimeoutError
 
+from crawl4ai_mcp.egress import BrowserRequestGuard, UrlPolicy
 from crawl4ai_mcp.models import CostKind, Tier
 from crawl4ai_mcp.providers.camoufox import CamoufoxProvider
+
+
+def public_policy(address: str = "93.184.216.34") -> UrlPolicy:
+    async def resolver(_host: str, _port: int):
+        return [ipaddress.ip_address(address)]
+
+    return UrlPolicy(resolver)
+
+
+class FakeRoute:
+    def __init__(self):
+        self.fell_back = False
+        self.aborted = False
+
+    async def fallback(self):
+        self.fell_back = True
+
+    async def abort(self, _reason="blockedbyclient"):
+        self.aborted = True
+
+
+class FakeFrame:
+    def __init__(self, page):
+        self.page = page
+
+
+class FakeNavigationRequest:
+    def __init__(self, url, frame):
+        self.url = url
+        self.frame = frame
+
+    def is_navigation_request(self):
+        return True
 
 
 class FakePinnedProxy:
@@ -27,9 +62,29 @@ class FakePinnedProxy:
 class FakeRequestGuard:
     def __init__(self):
         self.contexts = []
+        self.recorders = []
 
     async def install(self, context):
         self.contexts.append(context)
+
+    def begin_fetch(self):
+        recorder = _FakeRecorder()
+        self.recorders.append(recorder)
+        return recorder
+
+    def bind_page(self, page):
+        pass
+
+
+class _FakeRecorder:
+    def __init__(self):
+        self._events = []
+
+    def blocked(self):
+        return list(self._events)
+
+    def close(self):
+        pass
 
 
 class FakeResponse:
@@ -66,9 +121,13 @@ class FakeContext:
         self.gate = gate
         self.final_url = final_url
         self.closed = False
+        self.route_calls = 0
 
     async def new_page(self):
         return FakePage(self.gate, self.final_url)
+
+    async def route(self, pattern, handler):
+        self.route_calls += 1
 
     async def close(self):
         self.closed = True
@@ -637,3 +696,91 @@ async def test_camoufox_reap_after_terminal_close_is_noop(provider, gate, clock)
     clock.advance(121)
     await provider.reap_idle()
     assert provider.launcher.sessions[0].closed is True
+
+
+@pytest.mark.asyncio
+async def test_camoufox_blocked_main_frame_navigation_is_policy_error():
+    launcher = FakeLauncher()
+    guard = BrowserRequestGuard(public_policy())
+    provider = CamoufoxProvider(
+        enabled=True,
+        idle_seconds=120,
+        semaphore=asyncio.Semaphore(2),
+        launcher=launcher,
+        egress_proxy=FakePinnedProxy(),
+        request_guard=guard,
+    )
+    original_goto = FakePage.goto
+
+    async def blocked_goto(self, url, **kwargs):
+        frame = FakeFrame(self)
+        self.main_frame = frame
+        request = FakeNavigationRequest("https://10.0.0.5/secret", frame)
+        route = FakeRoute()
+        await guard.handle(route, request)
+        assert route.aborted and not route.fell_back
+        raise RuntimeError("Page.goto: navigation to page was aborted")
+
+    FakePage.goto = blocked_goto
+    try:
+        result = await provider.fetch("https://example.com/start")
+        assert result.policy_error == "non_global_address"
+        assert result.network_error is None
+    finally:
+        FakePage.goto = original_goto
+        await provider.close()
+
+
+@pytest.mark.asyncio
+async def test_camoufox_subresource_block_alone_is_not_policy_error():
+    launcher = FakeLauncher()
+    guard = BrowserRequestGuard(public_policy())
+    provider = CamoufoxProvider(
+        enabled=True,
+        idle_seconds=120,
+        semaphore=asyncio.Semaphore(2),
+        launcher=launcher,
+        egress_proxy=FakePinnedProxy(),
+        request_guard=guard,
+    )
+    original_goto = FakePage.goto
+
+    async def subresource_goto(self, url, **kwargs):
+        frame = FakeFrame(self)
+        self.main_frame = frame
+        route = FakeRoute()
+        request = FakeNavigationRequest("https://10.0.0.5/tracker.js", frame)
+        request.is_navigation_request = lambda: False
+        await guard.handle(route, request)
+        assert route.aborted
+        return FakeResponse()
+
+    FakePage.goto = subresource_goto
+    try:
+        result = await provider.fetch("https://example.com/")
+        assert result.policy_error is None
+        assert result.target_status_code == 200
+    finally:
+        FakePage.goto = original_goto
+        await provider.close()
+
+
+@pytest.mark.asyncio
+async def test_camoufox_recorder_is_cleaned_up_after_fetch():
+    launcher = FakeLauncher()
+    guard = BrowserRequestGuard(public_policy())
+    provider = CamoufoxProvider(
+        enabled=True,
+        idle_seconds=120,
+        semaphore=asyncio.Semaphore(2),
+        launcher=launcher,
+        egress_proxy=FakePinnedProxy(),
+        request_guard=guard,
+    )
+    try:
+        result = await provider.fetch("https://example.com/")
+        assert result.target_status_code == 200
+        assert guard._pages == {}
+        assert guard._by_task == {}
+    finally:
+        await provider.close()

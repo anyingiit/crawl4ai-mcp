@@ -304,6 +304,45 @@ class UrlPolicy:
         )
 
 
+class FetchRecorder:
+    """Request-scoped blocked main-frame navigation recorder.
+
+    One recorder per provider fetch. The fetch binds every page it
+    navigates through ``BrowserRequestGuard.bind_page``; blocked
+    main-frame navigations observed on a bound page are recorded here
+    and nowhere else, so concurrent fetches never cross-attribute.
+    ``close()`` unbinds the pages and drops the task mapping, keeping
+    the guard's registries bounded. Callers must close the recorder in
+    ``finally`` so success, failure, and cancellation all clean up.
+    """
+
+    __slots__ = ("_guard", "_task", "_pages", "_events")
+
+    def __init__(self, guard: "BrowserRequestGuard", task):
+        self._guard = guard
+        self._task = task
+        self._pages: set[object] = set()
+        self._events: list[tuple[str, str]] = []
+
+    def _bind(self, page) -> None:
+        self._pages.add(page)
+        self._guard._pages[page] = self
+
+    def _record(self, url: str, reason: str) -> None:
+        self._events.append((url, reason))
+
+    def blocked(self) -> list[tuple[str, str]]:
+        """(url, reason) pairs of blocked main-frame navigations on this fetch."""
+        return list(self._events)
+
+    def close(self) -> None:
+        guard = self._guard
+        for page in self._pages:
+            guard._pages.pop(page, None)
+        self._pages.clear()
+        guard._by_task.pop(self._task, None)
+
+
 class BrowserRequestGuard:
     """Intercepts every browser subresource and continues only public URLs.
 
@@ -316,23 +355,49 @@ class BrowserRequestGuard:
     installs await the same in-flight registration instead of racing
     past a pending `context.route()` call, and the shared registration
     is shielded so cancelling one waiter never cancels it for everyone.
+
+    Blocked main-frame navigation telemetry is request-scoped: each
+    provider fetch begins a ``FetchRecorder`` and binds its pages
+    through ``bind_page``; ``handle`` records a blocked main-frame
+    navigation only for the recorder bound to the requesting page.
     """
 
     def __init__(self, policy: UrlPolicy):
         self._policy = policy
         self._installed = weakref.WeakSet()
         self._inflight: weakref.WeakKeyDictionary = weakref.WeakKeyDictionary()
-        self._blocked_navigations: list[tuple[str, str]] = []
+        self._pages: dict[object, FetchRecorder] = {}
+        self._by_task: dict[asyncio.Task, FetchRecorder] = {}
 
-    def blocked_marker(self) -> int:
-        """Monotonic marker of the current blocked-navigation log length."""
-        return len(self._blocked_navigations)
+    def begin_fetch(self) -> FetchRecorder:
+        """Create the request-scoped recorder for the calling fetch task."""
+        task = asyncio.current_task()
+        recorder = FetchRecorder(self, task)
+        self._by_task[task] = recorder
+        return recorder
 
-    def blocked_since(self, marker: int) -> list[tuple[str, str]]:
-        """(url, reason) pairs of main-frame navigations blocked after marker."""
-        if marker >= len(self._blocked_navigations):
-            return []
-        return self._blocked_navigations[marker:]
+    def bind_page(self, page) -> None:
+        """Associate a page with the calling fetch's recorder."""
+        recorder = self._by_task.get(asyncio.current_task())
+        if recorder is not None:
+            recorder._bind(page)
+
+    def _recorder_of(self, request) -> FetchRecorder | None:
+        frame = getattr(request, "frame", None)
+        page = getattr(frame, "page", None) if frame is not None else None
+        return self._pages.get(page)
+
+    @staticmethod
+    def _is_main_frame_navigation(request) -> bool:
+        nav = getattr(request, "is_navigation_request", None)
+        if not callable(nav) or not nav():
+            return False
+        frame = getattr(request, "frame", None)
+        page = getattr(frame, "page", None) if frame is not None else None
+        if frame is None or page is None:
+            return False
+        main = getattr(page, "main_frame", None)
+        return main is None or main is frame
 
     async def install(self, context) -> None:
         pending = self._inflight.get(context)
@@ -361,9 +426,9 @@ class BrowserRequestGuard:
         try:
             await self._policy.resolve(request.url)
         except UrlPolicyError as exc:
-            is_navigation = getattr(request, "is_navigation_request", None)
-            if callable(is_navigation) and is_navigation():
-                self._blocked_navigations.append((request.url, exc.reason.value))
+            recorder = self._recorder_of(request)
+            if recorder is not None and self._is_main_frame_navigation(request):
+                recorder._record(request.url, exc.reason.value)
             await route.abort()
         else:
             await route.fallback()

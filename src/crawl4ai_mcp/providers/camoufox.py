@@ -99,19 +99,20 @@ class CamoufoxProvider:
                         )
                 session = self._session
                 self._active_fetches += 1
+            recorder = self.request_guard.begin_fetch()
             try:
                 def fail(exc: Exception, *, network: bool = False) -> FetchResult:
-                    network_error = (
-                        "browser_navigation_failed"
-                        if network
-                        and browser_network_error(
-                            exc, operation=FetchStage.NAVIGATION
-                        )
-                        else None
-                    )
+                    blocked = recorder.blocked()
+                    policy_error = blocked[0][1] if blocked else None
+                    network_error = None
+                    if policy_error is None and network and browser_network_error(
+                        exc, operation=FetchStage.NAVIGATION
+                    ):
+                        network_error = "browser_navigation_failed"
                     return failed_result(
                         url, self.tier, self.cost_kind, str(exc), started,
                         network_error=network_error,
+                        policy_error=policy_error,
                     )
 
                 context = None
@@ -131,6 +132,7 @@ class CamoufoxProvider:
                         page = await context.new_page()
                     except Exception as exc:
                         return fail(exc)
+                    self.request_guard.bind_page(page)
                     try:
                         response = await page.goto(
                             url, wait_until="domcontentloaded", timeout=60_000
@@ -162,6 +164,7 @@ class CamoufoxProvider:
                     elapsed_ms=int((time.monotonic() - started) * 1000),
                 )
             finally:
+                recorder.close()
                 async with self._lifecycle:
                     self._active_fetches -= 1
                     self._last_used = self._clock()

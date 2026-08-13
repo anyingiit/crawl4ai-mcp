@@ -467,16 +467,29 @@ class _FakeEgressProxy:
 
 class _FakeGuard:
     def __init__(self):
-        self._blocked = []
+        self.recorders = []
 
     async def install(self, context):
         pass
 
-    def blocked_marker(self):
-        return len(self._blocked)
+    def begin_fetch(self):
+        recorder = _FakeRecorder()
+        self.recorders.append(recorder)
+        return recorder
 
-    def blocked_since(self, marker):
-        return self._blocked[marker:]
+    def bind_page(self, page):
+        pass
+
+
+class _FakeRecorder:
+    def __init__(self):
+        self._events = []
+
+    def blocked(self):
+        return list(self._events)
+
+    def close(self):
+        pass
 
 
 def make_browser_provider(container_factory, guard=None):
@@ -549,12 +562,14 @@ async def test_public_to_private_browser_redirect_is_policy_error_without_paid_t
         return [ipaddress.ip_address("93.184.216.34")]
 
     guard = BrowserRequestGuard(UrlPolicy(resolver))
+    page = _FakePage()
+    frame = _FakeFrame(page)
+    page.main_frame = frame
 
     async def blocked_arun(self, url, config=None):
-        from crawl4ai_mcp.egress import BrowserRequestGuard
-
+        guard.bind_page(page)
         route = _FakeRoute()
-        request = _FakeNavigationRequest("https://private.example/secret")
+        request = _FakeNavigationRequest("https://private.example/secret", frame)
         await guard.handle(route, request)
         assert route.aborted and not route.fell_back
         return _FakeContainer(
@@ -604,9 +619,20 @@ class _FakeRoute:
         self.aborted = True
 
 
+class _FakeFrame:
+    def __init__(self, page):
+        self.page = page
+
+
+class _FakePage:
+    def __init__(self, main_frame=None):
+        self.main_frame = main_frame
+
+
 class _FakeNavigationRequest:
-    def __init__(self, url):
+    def __init__(self, url, frame=None):
         self.url = url
+        self.frame = frame
 
     def is_navigation_request(self):
         return True

@@ -119,9 +119,10 @@ class BrowserProvider:
     async def _on_page_context_created(self, page, *, context=None, config=None):
         if context is not None:
             await self.request_guard.install(context)
+        self.request_guard.bind_page(page)
 
-    def _blocked_policy_error(self, marker: int) -> str | None:
-        blocked = self.request_guard.blocked_since(marker)
+    def _blocked_policy_error(self, recorder) -> str | None:
+        blocked = recorder.blocked()
         if not blocked:
             return None
         return blocked[0][1]
@@ -150,7 +151,7 @@ class BrowserProvider:
                     self._install_guard()
                 crawler = self._crawler
                 self._active_fetches += 1
-            marker = self.request_guard.blocked_marker()
+            recorder = self.request_guard.begin_fetch()
             try:
                 try:
                     config = self._run_config()
@@ -165,7 +166,7 @@ class BrowserProvider:
                         )
                         else None
                     )
-                    policy_error = self._blocked_policy_error(marker)
+                    policy_error = self._blocked_policy_error(recorder)
                     if network_error or policy_error:
                         return failed_result(
                             url, self.tier, self.cost_kind, str(exc), started,
@@ -192,7 +193,7 @@ class BrowserProvider:
                         )
                         else None
                     )
-                    policy_error = self._blocked_policy_error(marker)
+                    policy_error = self._blocked_policy_error(recorder)
                     return failed_result(
                         url, self.tier, self.cost_kind,
                         error_message or "browser fetch failed", started,
@@ -212,6 +213,7 @@ class BrowserProvider:
                     error=error_message,
                 )
             finally:
+                recorder.close()
                 async with self._lifecycle:
                     self._active_fetches -= 1
                     self._last_used = self._clock()
