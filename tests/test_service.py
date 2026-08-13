@@ -5,7 +5,14 @@ import pytest
 
 from crawl4ai_mcp.config import AppConfig
 from crawl4ai_mcp.egress import UrlPolicy, UrlPolicyError, UrlPolicyReason
-from crawl4ai_mcp.models import CostKind, FetchResult, ProviderAvailability, Tier
+from crawl4ai_mcp.models import (
+    CostKind,
+    FetchResult,
+    ProviderAvailability,
+    ScrapeOutcome,
+    ScrapeResponse,
+    Tier,
+)
 from crawl4ai_mcp.service import CrawlService
 
 
@@ -195,6 +202,99 @@ async def test_service_crawl_returns_pages_and_stats_without_raw_html(config):
         assert payload["pages"][0]["url"] == "https://example.com/"
         assert payload["pages"][0]["response"]["status"] == "success"
         assert "raw_html" not in str(payload)
+    finally:
+        await service.close()
+
+
+@pytest.mark.asyncio
+async def test_service_scrape_html_returns_exact_successful_raw_html(config):
+    providers = {Tier.HTTP: StubProvider(Tier.HTTP)}
+    service = await make_service(config, providers=providers)
+    service._url_policy = public_policy()
+    try:
+        payload = await service.scrape("https://example.com/", format="html")
+        assert payload["status"] == "success"
+        assert payload["content"] == "<main>" + "x" * 300 + "</main>"
+    finally:
+        await service.close()
+
+
+@pytest.mark.asyncio
+async def test_service_scrape_markdown_default_returns_rendered_markdown_not_html(config):
+    providers = {Tier.HTTP: StubProvider(Tier.HTTP)}
+    service = await make_service(config, providers=providers)
+    service._url_policy = public_policy()
+    try:
+        payload = await service.scrape("https://example.com/")
+        assert payload["status"] == "success"
+        assert payload["content"] == "# Ok"
+        assert payload["content"] != "<main>" + "x" * 300 + "</main>"
+    finally:
+        await service.close()
+
+
+class StubOutcomeEngine:
+    def __init__(self, outcome):
+        self.outcome = outcome
+
+    async def scrape(self, url, maximum=Tier.FIRECRAWL, force=None):
+        return self.outcome
+
+
+def markdown_only_success(url="https://example.com/"):
+    response = ScrapeResponse(
+        url=url,
+        status="success",
+        content="# Title",
+        tier_used="http",
+        cost_kind=CostKind.FREE,
+        elapsed_ms=1,
+    )
+    return ScrapeOutcome(response=response, raw_html=None, effective_url=url)
+
+
+@pytest.mark.asyncio
+async def test_service_scrape_html_without_raw_html_fails(config):
+    service = CrawlService(
+        config,
+        providers={Tier.HTTP: StubProvider(Tier.HTTP)},
+        engine=StubOutcomeEngine(markdown_only_success()),
+    )
+    await service.start()
+    service._url_policy = public_policy()
+    try:
+        payload = await service.scrape("https://example.com/", format="html")
+        assert payload["status"] == "failed"
+        assert payload["error"] == "successful provider did not return html"
+        assert payload["content"] == ""
+    finally:
+        await service.close()
+
+
+@pytest.mark.asyncio
+async def test_service_scrape_html_preserves_non_success_status(config):
+    response = ScrapeResponse(
+        url="https://example.com/",
+        status="cooldown",
+        elapsed_ms=0,
+        cooldown_until=999,
+        error="cooldown",
+    )
+    outcome = ScrapeOutcome(
+        response=response, raw_html=None, effective_url="https://example.com/"
+    )
+    service = CrawlService(
+        config,
+        providers={Tier.HTTP: StubProvider(Tier.HTTP)},
+        engine=StubOutcomeEngine(outcome),
+    )
+    await service.start()
+    service._url_policy = public_policy()
+    try:
+        payload = await service.scrape("https://example.com/", format="html")
+        assert payload["status"] == "cooldown"
+        assert payload["cooldown_until"] == 999
+        assert payload["error"] == "cooldown"
     finally:
         await service.close()
 

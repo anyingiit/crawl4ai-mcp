@@ -1,9 +1,18 @@
+import pytest
+from pydantic import ValidationError
+
 from crawl4ai_mcp.models import (
     AttemptResponse,
+    BrowserState,
     CostKind,
     Decision,
+    DiagnoseDomainPolicy,
+    DiagnoseResponse,
     FetchResult,
+    MapResponse,
+    ProviderAvailability,
     ProviderErrorKind,
+    RecentFailure,
     ScrapeOutcome,
     ScrapeResponse,
     Tier,
@@ -154,3 +163,74 @@ def test_scrape_outcome_is_frozen_and_slotted():
         assert isinstance(exc, Exception)
     else:
         raise AssertionError("ScrapeOutcome must be frozen")
+
+
+def test_scrape_response_serializes_tier_names_not_ints():
+    response = ScrapeResponse(
+        url="https://example.com",
+        status="success",
+        content="# ok",
+        tier_used="undetected",
+        cost_kind=CostKind.FREE,
+        elapsed_ms=3,
+        attempts=[
+            AttemptResponse(
+                tier="undetected",
+                decision=Decision.SUCCESS,
+                cost_kind=CostKind.FREE,
+                elapsed_ms=3,
+            )
+        ],
+    )
+    payload = response.model_dump(mode="json")
+    assert payload["tier_used"] == "undetected"
+    assert payload["attempts"][0]["tier"] == "undetected"
+
+
+def test_scrape_response_and_attempt_reject_integer_tiers():
+    with pytest.raises(ValidationError):
+        ScrapeResponse(
+            url="https://example.com", status="success", tier_used=0, elapsed_ms=1
+        )
+    with pytest.raises(ValidationError):
+        AttemptResponse(
+            tier=0, decision=Decision.SUCCESS, cost_kind=CostKind.FREE, elapsed_ms=1
+        )
+
+
+def test_map_response_is_typed_urls_list():
+    response = MapResponse(urls=["https://example.com/a", "https://example.com/b"])
+    assert set(response.model_dump(mode="json")) == {"urls"}
+    assert response.urls == ["https://example.com/a", "https://example.com/b"]
+
+
+def test_diagnose_response_serializes_domain_tier_as_lowercase_name():
+    response = DiagnoseResponse(
+        rss_bytes=1024,
+        providers={"HTTP": ProviderAvailability(enabled=True, ready=True)},
+        browsers={
+            "HTTP": BrowserState(active=False, active_fetches=0, last_used=0.0)
+        },
+        recent_failures=[
+            RecentFailure(
+                url="https://example.com",
+                time=1,
+                error="all tiers failed",
+                attempts=["http", "stealth"],
+            )
+        ],
+        domain_policies=[
+            DiagnoseDomainPolicy(domain="example.com", best_tier="stealth", updated_at=2)
+        ],
+    )
+    payload = response.model_dump(mode="json")
+    assert payload["domain_policies"][0]["best_tier"] == "stealth"
+    assert payload["browsers"]["HTTP"]["active"] is False
+    assert payload["recent_failures"][0]["attempts"] == ["http", "stealth"]
+
+
+def test_dead_integer_tier_models_are_removed():
+    import crawl4ai_mcp.models as models
+
+    assert not hasattr(models, "ScrapeResult")
+    assert not hasattr(models, "Attempt")

@@ -265,12 +265,32 @@ async def test_map_urls_dedups_and_filters_origin():
 
 
 @pytest.mark.asyncio
-async def test_map_urls_hard_limits_to_100():
+async def test_map_urls_output_caps_at_100_entries():
     entries = [entry(f"https://docs.example.com/p{i}") for i in range(500)]
     factory = seeder_factory_for(entries)
-    urls = await map_urls("https://docs.example.com/", limit=500, policy=public_policy(), proxy=FakePinnedProxy(), seeder_factory=factory)
+    urls = await map_urls("https://docs.example.com/", limit=100, policy=public_policy(), proxy=FakePinnedProxy(), seeder_factory=factory)
     assert len(urls) == 100
     assert factory.holder["seeder"].calls[0][1].max_urls == 100
+
+
+@pytest.mark.parametrize("limit", [0, -1, 101])
+@pytest.mark.asyncio
+async def test_map_urls_rejects_limit_outside_one_to_one_hundred(limit):
+    with pytest.raises(ValueError, match="limit must be between 1 and 100"):
+        await map_urls(
+            "https://example.com/", limit=limit, policy=public_policy(), proxy=FakePinnedProxy()
+        )
+
+
+@pytest.mark.asyncio
+async def test_map_urls_rejects_bad_limit_before_any_client_or_seeder():
+    factory = SeederFactory()
+    with pytest.raises(ValueError):
+        await map_urls(
+            "https://example.com/", limit=0, policy=public_policy(), proxy=FakePinnedProxy(), seeder_factory=factory
+        )
+    assert factory.calls == []
+    assert factory.clients == []
 
 
 class ScriptedProvider:

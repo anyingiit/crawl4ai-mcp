@@ -7,7 +7,7 @@ from crawl4ai_mcp.server import create_server
 
 
 class FakeService:
-    async def scrape(self, url, max_tier="firecrawl", force_tier=None):
+    async def scrape(self, url, format="markdown", max_tier="firecrawl", force_tier=None):
         return {
             "url": url,
             "status": "success",
@@ -22,13 +22,28 @@ class FakeService:
         }
 
     async def crawl(self, url, max_pages=10, max_depth=2, include_pattern=None):
-        return []
+        return {
+            "pages": [],
+            "stats": {
+                "attempted_pages": 0,
+                "successful_pages": 0,
+                "failed_pages": 0,
+                "max_depth_reached": 0,
+                "elapsed_ms": 0,
+            },
+        }
 
     async def map(self, url, search=None, limit=100):
         return []
 
     async def diagnose(self, domain=None):
-        return {"providers": {}}
+        return {
+            "rss_bytes": 1,
+            "providers": {},
+            "browsers": {},
+            "recent_failures": [],
+            "domain_policies": [],
+        }
 
 
 @pytest.fixture
@@ -64,6 +79,32 @@ async def test_exactly_four_tools_with_defaults(client):
 
     diagnose_props = by_name["diagnose"].inputSchema["properties"]
     assert "domain" in diagnose_props
+
+
+@pytest.mark.asyncio
+async def test_exactly_four_tools_with_explicit_output_schemas(client):
+    tools = {tool.name: tool for tool in await client.list_tools()}
+    assert set(tools) == {"scrape", "crawl", "map", "diagnose"}
+    assert tools["scrape"].inputSchema["properties"]["format"]["enum"] == ["markdown", "html"]
+    assert set(tools["crawl"].outputSchema["properties"]) == {"pages", "stats"}
+    assert set(tools["map"].outputSchema["properties"]) == {"urls"}
+    assert tools["map"].inputSchema["properties"]["limit"]["minimum"] == 1
+    assert tools["map"].inputSchema["properties"]["limit"]["maximum"] == 100
+
+
+@pytest.mark.asyncio
+async def test_tier_strings_and_bounds_constrained_in_schema(client):
+    tools = {tool.name: tool for tool in await client.list_tools()}
+    expected_tiers = ["http", "stealth", "undetected", "camoufox", "proxy", "rayobyte", "firecrawl"]
+    scrape_props = tools["scrape"].inputSchema["properties"]
+    assert scrape_props["max_tier"]["enum"] == expected_tiers
+    force_enum = scrape_props["force_tier"]["anyOf"][0]["enum"]
+    assert force_enum == expected_tiers
+    crawl_props = tools["crawl"].inputSchema["properties"]
+    assert crawl_props["max_pages"]["minimum"] == 1
+    assert crawl_props["max_pages"]["maximum"] == 100
+    assert crawl_props["max_depth"]["minimum"] == 1
+    assert crawl_props["max_depth"]["maximum"] == 5
 
 
 @pytest.mark.asyncio

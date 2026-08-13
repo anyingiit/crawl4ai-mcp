@@ -17,7 +17,14 @@ from crawl4ai_mcp.egress import (
     UpstreamProxy,
     UrlPolicy,
 )
-from crawl4ai_mcp.models import Tier
+from crawl4ai_mcp.models import (
+    DiagnoseDomainPolicy,
+    MaxDepth,
+    MaxPages,
+    ScrapeFormat,
+    Tier,
+    TierName,
+)
 from crawl4ai_mcp.policy import PolicyStore
 from crawl4ai_mcp.providers.base import FetchProvider
 from crawl4ai_mcp.providers.browser import BrowserProvider
@@ -30,7 +37,13 @@ from crawl4ai_mcp.providers.rayobyte import RayobyteProvider
 def parse_tier(value: str | None) -> Tier | None:
     if value is None or value == "":
         return None
-    return Tier[value.upper()]
+    try:
+        return Tier[value.upper()]
+    except KeyError:
+        raise ValueError(
+            f"unknown tier {value!r}; expected one of "
+            f"{', '.join(tier.name.lower() for tier in Tier)}"
+        ) from None
 
 
 def parse_proxy_url(url: str) -> ProxyConfig:
@@ -186,7 +199,11 @@ class CrawlService:
         self._close_events.append("_policy_closed")
 
     async def scrape(
-        self, url: str, max_tier: str = "firecrawl", force_tier: str | None = None
+        self,
+        url: str,
+        format: ScrapeFormat = "markdown",
+        max_tier: TierName = "firecrawl",
+        force_tier: TierName | None = None,
     ) -> dict:
         maximum = parse_tier(max_tier) if max_tier else Tier.FIRECRAWL
         force = parse_tier(force_tier)
@@ -198,6 +215,18 @@ class CrawlService:
             await self._url_policy.resolve(url)
         outcome = await self.engine.scrape(url, maximum=maximum, force=force)
         response = outcome.response
+        if format == "html":
+            if response.status == "success":
+                if outcome.raw_html is None:
+                    response = response.model_copy(
+                        update={
+                            "status": "failed",
+                            "content": "",
+                            "error": "successful provider did not return html",
+                        }
+                    )
+                else:
+                    response = response.model_copy(update={"content": outcome.raw_html})
         payload = response.model_dump(mode="json")
         if response.status == "failed":
             self._recent_failures.appendleft(
@@ -213,8 +242,8 @@ class CrawlService:
     async def crawl(
         self,
         url: str,
-        max_pages: int = 10,
-        max_depth: int = 2,
+        max_pages: MaxPages = 10,
+        max_depth: MaxDepth = 2,
         include_pattern: str | None = None,
     ) -> dict:
         response = await crawl_site(
@@ -260,5 +289,20 @@ class CrawlService:
             "providers": provider_status,
             "browsers": browser_state,
             "recent_failures": list(self._recent_failures),
-            "domain_policies": [policy.model_dump(mode="json") for policy in policies],
+            "domain_policies": [
+                DiagnoseDomainPolicy(
+                    domain=policy.domain,
+                    best_tier=(
+                        policy.best_tier.name.lower()
+                        if policy.best_tier is not None
+                        else None
+                    ),
+                    last_success_at=policy.last_success_at,
+                    fail_count=policy.fail_count,
+                    cooldown_until=policy.cooldown_until,
+                    last_error_kind=policy.last_error_kind,
+                    updated_at=policy.updated_at,
+                ).model_dump(mode="json")
+                for policy in policies
+            ],
         }

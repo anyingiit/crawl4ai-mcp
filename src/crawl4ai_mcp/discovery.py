@@ -21,6 +21,9 @@ from crawl4ai_mcp.models import (
     CrawlPage,
     CrawlResponse,
     CrawlStats,
+    MapLimit,
+    MaxDepth,
+    MaxPages,
     ScrapeOutcome,
     Tier,
 )
@@ -102,13 +105,14 @@ class PinnedUrlSeeder(AsyncUrlSeeder):
 async def map_urls(
     url: str,
     search: str | None = None,
-    limit: int = 100,
+    limit: MapLimit = 100,
     *,
     policy: UrlPolicy,
     proxy: PinnedEgressProxy,
     seeder_factory=None,
 ) -> list[str]:
-    limit = min(limit, MAX_MAP_URLS)
+    if not 1 <= limit <= MAX_MAP_URLS:
+        raise ValueError(f"limit must be between 1 and {MAX_MAP_URLS}")
     domain = _hostname(url)
 
     await policy.resolve(url)
@@ -185,8 +189,8 @@ def extract_links(
 
 async def crawl_site(
     url: str,
-    max_pages: int = 10,
-    max_depth: int = 2,
+    max_pages: MaxPages = 10,
+    max_depth: MaxDepth = 2,
     include_pattern: str | None = None,
     engine=None,
     policy: UrlPolicy | None = None,
