@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import asyncio
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 from dotenv import dotenv_values
+from fastmcp import FastMCP
 
 from crawl4ai_mcp.config import load_config
 from crawl4ai_mcp.server import create_server
@@ -18,14 +20,15 @@ def main() -> None:
     service = CrawlService(config)
     mcp = create_server(service)
 
-    @mcp.lifespan
-    async def lifespan(_app):
+    @asynccontextmanager
+    async def lifespan(_app: FastMCP):
         await service.start()
         try:
             yield
         finally:
             await service.close()
 
+    mcp = create_server(service, lifespan=lifespan)
     mcp.run(
         transport="http",
         host="127.0.0.1",

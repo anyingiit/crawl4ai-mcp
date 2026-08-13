@@ -4,8 +4,8 @@ from fastmcp import FastMCP
 from starlette.responses import JSONResponse
 
 
-def create_server(service) -> FastMCP:
-    mcp = FastMCP("crawl4ai-mcp")
+def create_server(service, lifespan=None) -> FastMCP:
+    mcp = FastMCP("crawl4ai-mcp", lifespan=lifespan)
 
     @mcp.custom_route("/health", methods=["GET"])
     async def health(_request):
