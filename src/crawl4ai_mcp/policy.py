@@ -1,11 +1,11 @@
 from __future__ import annotations
 
 import sqlite3
-from urllib.parse import urlsplit
 
 from pydantic import BaseModel
 from aiosqlite import Connection, connect
 
+from crawl4ai_mcp.egress import parse_public_url
 from crawl4ai_mcp.models import Tier
 
 DAY_SECONDS = 86_400
@@ -35,8 +35,7 @@ class DomainPolicy(BaseModel):
 
 
 def normalize_domain(url: str) -> str:
-    hostname = urlsplit(url).hostname or ""
-    return hostname.lower().rstrip(".")
+    return parse_public_url(url).host
 
 
 def _row_to_policy(row: sqlite3.Row) -> DomainPolicy:

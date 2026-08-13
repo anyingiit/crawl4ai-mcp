@@ -1,6 +1,21 @@
 import pytest
+from crawl4ai_mcp.egress import UrlPolicyError
 from crawl4ai_mcp.models import Tier
-from crawl4ai_mcp.policy import PolicyStore
+from crawl4ai_mcp.policy import PolicyStore, normalize_domain
+
+
+def test_normalize_domain_rejects_non_public_urls():
+    with pytest.raises(UrlPolicyError):
+        normalize_domain("file:///etc/passwd")
+
+
+@pytest.mark.asyncio
+async def test_invalid_url_cannot_create_empty_domain_row(tmp_path):
+    store = await PolicyStore.open(tmp_path / "policy.db")
+    with pytest.raises(UrlPolicyError):
+        await store.record_success("file:///etc/passwd", Tier.UNDETECTED, now=1_000)
+    assert await store.list_policies() == []
+    await store.close()
 
 
 @pytest.mark.asyncio
