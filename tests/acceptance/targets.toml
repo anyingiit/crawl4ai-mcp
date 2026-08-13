@@ -11,4 +11,9 @@ note = "2026-08-13: JS-injected anchor observed via crawl4ai stealth tier"
 [antibot_easy]
 url = "https://web-scraping.dev/antibot/easy"
 marker = ""
-note = "2026-08-13: to be recorded by a real browser in Task 8"
+note = "2026-08-13: fixture currently returns 403 'You are a bot' (Reference ID AN71-B07-CH3CK) for every engine tested: Camoufox, stealth Chromium, and Firecrawl auto proxy. No success marker observable; do not use as a bypass-success target until the fixture clears. Browser lifecycle is instead verified against the js_links target and /classify-test/blocked is used for block classification."
+
+[classify_blocked]
+url = "https://web-scraping.dev/classify-test/blocked"
+marker = "challenge"
+note = "2026-08-13: deterministic 403 Cloudflare-style block; classifies as CLOUDFLARE via marker text."
