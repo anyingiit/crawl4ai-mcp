@@ -218,12 +218,22 @@ async def crawl_site(
             continue
         visited.add(page_url)
         outcome: ScrapeOutcome = await engine.scrape(page_url)
-        pages.append(CrawlPage(url=page_url, response=outcome.response))
+        effective = page_url
+        if outcome.response.status == "success":
+            try:
+                if same_origin(outcome.effective_url, root):
+                    effective = parse_public_url(outcome.effective_url).url
+            except UrlPolicyError:
+                pass
+        pages.append(CrawlPage(url=effective, response=outcome.response))
         max_depth_reached = max(max_depth_reached, depth)
         if depth >= max_depth or outcome.response.status != "success":
             continue
         if outcome.raw_html is None or not same_origin(outcome.effective_url, root):
             continue
+        if effective != page_url:
+            visited.add(effective)
+            queued.add(effective)
         for link in extract_links(
             outcome.raw_html, outcome.effective_url, origin, include_pattern
         ):

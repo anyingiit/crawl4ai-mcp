@@ -550,3 +550,54 @@ async def test_crawl_site_first_success_sets_tier_for_rest(policy_store):
     crawl = await crawl_site("http://localhost:9000/b", engine=engine, max_pages=2, max_depth=1)
     assert calls[0] == Tier.STEALTH
     assert crawl.pages[0].response.tier_used == "stealth"
+
+
+def redirect_alias_outcomes(paid=False):
+    root = successful_outcome(
+        "https://example.com/start",
+        raw_html=(
+            '<main><a href="/landed">landed</a>'
+            '<a href="/landed">landed again</a></main>'
+        ),
+        effective_url="https://example.com/landed",
+    )
+    if paid:
+        root.response.tier_used = "rayobyte"
+        root.response.cost_kind = CostKind.RAYOBYTE_CREDIT
+    return {"https://example.com/start": root}
+
+
+@pytest.mark.asyncio
+async def test_crawl_reports_same_origin_redirect_alias_as_page_url_without_refetch():
+    engine = ScriptedEngine(redirect_alias_outcomes())
+    crawl = await crawl_site(
+        "https://example.com/start", engine=engine, policy=public_policy(),
+        max_pages=10, max_depth=2,
+    )
+    assert [page.url for page in crawl.pages] == ["https://example.com/landed"]
+    assert engine.calls == ["https://example.com/start"]
+    assert crawl.stats.attempted_pages == 1
+    assert crawl.stats.successful_pages == 1
+
+
+@pytest.mark.asyncio
+async def test_paid_tier_redirect_alias_is_never_refetched():
+    engine = ScriptedEngine(redirect_alias_outcomes(paid=True))
+    crawl = await crawl_site(
+        "https://example.com/start", engine=engine, policy=public_policy(),
+        max_pages=10, max_depth=2,
+    )
+    assert [page.url for page in crawl.pages] == ["https://example.com/landed"]
+    assert engine.calls == ["https://example.com/start"]
+    assert crawl.pages[0].response.tier_used == "rayobyte"
+    assert crawl.pages[0].response.cost_kind == CostKind.RAYOBYTE_CREDIT
+
+
+@pytest.mark.asyncio
+async def test_crawl_reports_requested_alias_when_redirect_escapes_origin():
+    engine = ScriptedEngine(cross_origin_redirect_outcome())
+    crawl = await crawl_site(
+        "https://example.com/", engine=engine, policy=public_policy()
+    )
+    assert [page.url for page in crawl.pages] == ["https://example.com/"]
+    assert engine.calls == ["https://example.com/"]
