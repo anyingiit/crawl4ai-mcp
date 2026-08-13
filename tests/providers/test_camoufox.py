@@ -204,6 +204,7 @@ async def test_camoufox_launch_failure_is_normalized():
     result = await provider.fetch("https://example.com")
     assert result.status_code is None
     assert result.error is not None
+    assert result.network_error is None
     availability = provider.availability()
     assert availability.ready is False
     assert "artifact missing" in (availability.reason or "")
@@ -221,3 +222,61 @@ async def test_camoufox_fetch_preserves_tier_and_cost():
     assert "Camoufox content" in result.html
     assert launcher.sessions[0].browser.contexts[0].closed is True
     await provider.close()
+
+
+@pytest.mark.asyncio
+async def test_camoufox_navigation_network_error_is_classified():
+    launcher = FakeLauncher()
+    provider = make_provider(launcher=launcher)
+    original_goto = FakePage.goto
+
+    async def failing_goto(self, url, **kwargs):
+        raise RuntimeError(
+            "net::ERR_CONNECTION_REFUSED at https://example.com:443"
+        )
+
+    FakePage.goto = failing_goto
+    try:
+        result = await provider.fetch("https://example.com/")
+        assert result.network_error is not None
+        assert result.target_status_code is None
+    finally:
+        FakePage.goto = original_goto
+        await provider.close()
+
+
+@pytest.mark.asyncio
+async def test_camoufox_navigation_timeout_is_classified():
+    launcher = FakeLauncher()
+    provider = make_provider(launcher=launcher)
+    original_goto = FakePage.goto
+
+    async def timeout_goto(self, url, **kwargs):
+        raise RuntimeError("Timeout 60000ms exceeded.")
+
+    FakePage.goto = timeout_goto
+    try:
+        result = await provider.fetch("https://slow.example/")
+        assert result.network_error is not None
+    finally:
+        FakePage.goto = original_goto
+        await provider.close()
+
+
+@pytest.mark.asyncio
+async def test_camoufox_context_failure_is_not_network_error():
+    launcher = FakeLauncher()
+    provider = make_provider(launcher=launcher)
+    original_new_page = FakeContext.new_page
+
+    async def failing_new_page(self):
+        raise RuntimeError("Target page, context or browser has been closed")
+
+    FakeContext.new_page = failing_new_page
+    try:
+        result = await provider.fetch("https://example.com/")
+        assert result.network_error is None
+        assert result.error is not None
+    finally:
+        FakeContext.new_page = original_new_page
+        await provider.close()

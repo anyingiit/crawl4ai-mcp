@@ -366,3 +366,76 @@ async def test_fetch_result_preserves_browser_tier(fake_clock):
     assert result.status_code == 200
     assert "Hello" in result.html
     await provider.close()
+
+
+@pytest.mark.asyncio
+async def test_navigation_network_error_is_classified(fake_clock):
+    factory = FakeCrawlerFactory()
+    provider = BrowserProvider(
+        tier=Tier.STEALTH, factory=factory, idle_seconds=180,
+        semaphore=asyncio.Semaphore(2), clock=fake_clock,
+        egress_proxy=FakePinnedProxy(), request_guard=FakeRequestGuard(),
+    )
+    original_arun = FakeCrawler.arun
+
+    async def failing_arun(self, url, config=None):
+        raise RuntimeError(
+            "Failed on navigating ACS-GOTO:\n"
+            "net::ERR_NAME_NOT_RESOLVED at https://nonexistent.example/"
+        )
+
+    FakeCrawler.arun = failing_arun
+    try:
+        result = await provider.fetch("https://nonexistent.example/")
+        assert result.network_error is not None
+        assert result.target_status_code is None
+    finally:
+        FakeCrawler.arun = original_arun
+        await provider.close()
+
+
+@pytest.mark.asyncio
+async def test_navigation_timeout_is_classified(fake_clock):
+    factory = FakeCrawlerFactory()
+    provider = BrowserProvider(
+        tier=Tier.STEALTH, factory=factory, idle_seconds=180,
+        semaphore=asyncio.Semaphore(2), clock=fake_clock,
+        egress_proxy=FakePinnedProxy(), request_guard=FakeRequestGuard(),
+    )
+    original_arun = FakeCrawler.arun
+
+    async def timeout_arun(self, url, config=None):
+        raise RuntimeError(
+            "Failed on navigating ACS-GOTO:\nTimeout 60000ms exceeded."
+        )
+
+    FakeCrawler.arun = timeout_arun
+    try:
+        result = await provider.fetch("https://slow.example/")
+        assert result.network_error is not None
+    finally:
+        FakeCrawler.arun = original_arun
+        await provider.close()
+
+
+@pytest.mark.asyncio
+async def test_launch_failure_is_not_network_error(fake_clock):
+    factory = FakeCrawlerFactory()
+    provider = BrowserProvider(
+        tier=Tier.STEALTH, factory=factory, idle_seconds=180,
+        semaphore=asyncio.Semaphore(2), clock=fake_clock,
+        egress_proxy=FakePinnedProxy(), request_guard=FakeRequestGuard(),
+    )
+    original_arun = FakeCrawler.arun
+
+    async def launch_arun(self, url, config=None):
+        raise RuntimeError("Executable doesn't exist at /usr/lib/chromium/chrome")
+
+    FakeCrawler.arun = launch_arun
+    try:
+        result = await provider.fetch("https://example.com/")
+        assert result.network_error is None
+        assert result.error is not None
+    finally:
+        FakeCrawler.arun = original_arun
+        await provider.close()

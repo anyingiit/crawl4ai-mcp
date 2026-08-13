@@ -7,6 +7,7 @@ from typing import Callable
 from crawl4ai_mcp.egress import BrowserRequestGuard, PinnedEgressProxy
 from crawl4ai_mcp.models import CostKind, FetchResult, ProviderAvailability, Tier
 from crawl4ai_mcp.providers.base import failed_result
+from crawl4ai_mcp.providers.browser_errors import browser_network_error
 
 
 async def _default_launch():
@@ -107,8 +108,12 @@ class CamoufoxProvider:
                     elapsed_ms=int((time.monotonic() - started) * 1000),
                 )
             except Exception as exc:
+                network_error = (
+                    "browser_navigation_failed" if browser_network_error(exc) else None
+                )
                 return failed_result(
-                    url, self.tier, self.cost_kind, str(exc), started
+                    url, self.tier, self.cost_kind, str(exc), started,
+                    network_error=network_error,
                 )
             finally:
                 if context is not None:
