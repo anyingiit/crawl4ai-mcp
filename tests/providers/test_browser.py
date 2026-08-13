@@ -49,6 +49,19 @@ class FakeRouteContext:
             raise RuntimeError("route registration failed")
 
 
+class GatedRouteContext(FakeRouteContext):
+    def __init__(self, gate=None):
+        super().__init__()
+        self.gate = gate
+
+    async def route(self, pattern, handler):
+        self.route_calls += 1
+        if self.gate is not None:
+            await self.gate.wait()
+        if self.raise_on_route:
+            raise RuntimeError("route registration failed")
+
+
 class FakePinnedProxy:
     def __init__(self):
         self.endpoint_calls = []
@@ -224,6 +237,39 @@ async def test_browser_guard_install_rolls_back_on_route_registration_failure():
     context.raise_on_route = True
     with pytest.raises(RuntimeError):
         await guard.install(context)
+    context.raise_on_route = False
+    await guard.install(context)
+    assert context.route_calls == 2
+
+
+@pytest.mark.asyncio
+async def test_browser_guard_install_waits_for_inflight_registration():
+    guard = BrowserRequestGuard(public_policy())
+    gate = asyncio.Event()
+    context = GatedRouteContext(gate=gate)
+    first = asyncio.create_task(guard.install(context))
+    await asyncio.sleep(0.02)
+    second = asyncio.create_task(guard.install(context))
+    await asyncio.sleep(0.02)
+    assert context.route_calls == 1
+    assert not second.done()
+    gate.set()
+    await asyncio.gather(first, second)
+    assert context.route_calls == 1
+    await guard.install(context)
+    assert context.route_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_browser_guard_install_failure_shared_and_retryable():
+    guard = BrowserRequestGuard(public_policy())
+    context = FakeRouteContext()
+    context.raise_on_route = True
+    results = await asyncio.gather(
+        guard.install(context), guard.install(context), return_exceptions=True
+    )
+    assert all(isinstance(result, RuntimeError) for result in results)
+    assert context.route_calls == 1
     context.raise_on_route = False
     await guard.install(context)
     assert context.route_calls == 2

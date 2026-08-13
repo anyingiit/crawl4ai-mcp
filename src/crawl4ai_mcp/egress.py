@@ -252,21 +252,39 @@ class BrowserRequestGuard:
     pinning proxy remains the enforcement point for DNS and dial safety.
     Allowed requests fall back to previously registered handlers so
     crawl4ai's own route logic still runs.
+
+    Install is idempotent per context and synchronized: concurrent
+    installs await the same in-flight registration instead of racing
+    past a pending `context.route()` call.
     """
 
     def __init__(self, policy: UrlPolicy):
         self._policy = policy
         self._installed = weakref.WeakSet()
+        self._inflight: weakref.WeakKeyDictionary = weakref.WeakKeyDictionary()
 
     async def install(self, context) -> None:
+        pending = self._inflight.get(context)
+        if pending is not None:
+            await pending
+            return
         if context in self._installed:
             return
-        self._installed.add(context)
+        registration = asyncio.get_running_loop().create_task(
+            self._register(context)
+        )
+        self._inflight[context] = registration
+        try:
+            await registration
+        finally:
+            self._inflight.pop(context, None)
+
+    async def _register(self, context) -> None:
         try:
             await context.route("**/*", self.handle)
         except BaseException:
-            self._installed.discard(context)
             raise
+        self._installed.add(context)
 
     async def handle(self, route, request) -> None:
         try:
