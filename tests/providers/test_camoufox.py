@@ -1,7 +1,32 @@
 import asyncio
 import pytest
+from crawl4ai.async_configs import ProxyConfig
 from crawl4ai_mcp.models import CostKind, Tier
 from crawl4ai_mcp.providers.camoufox import CamoufoxProvider
+
+
+class FakePinnedProxy:
+    def __init__(self):
+        self.endpoint_calls = []
+        self._upstream_ports = {}
+
+    def endpoint(self, upstream=None):
+        self.endpoint_calls.append(upstream)
+        if upstream is None:
+            port = 41000
+        else:
+            port = self._upstream_ports.setdefault(
+                upstream, 41001 + len(self._upstream_ports)
+            )
+        return ProxyConfig(server=f"http://127.0.0.1:{port}")
+
+
+class FakeRequestGuard:
+    def __init__(self):
+        self.contexts = []
+
+    async def install(self, context):
+        self.contexts.append(context)
 
 
 class FakeResponse:
@@ -50,6 +75,7 @@ class FakeBrowser:
 
     async def new_context(self, **kwargs):
         context = FakeContext(self.gate)
+        context.kwargs = kwargs
         self.contexts.append(context)
         return context
 
@@ -104,7 +130,27 @@ def make_provider(enabled=True, launcher=None, clock=None, semaphore=None):
         semaphore=semaphore or asyncio.Semaphore(2),
         launcher=launcher or FakeLauncher(),
         clock=clock or FakeClock(),
+        egress_proxy=FakePinnedProxy(),
+        request_guard=FakeRequestGuard(),
     )
+
+
+@pytest.mark.asyncio
+async def test_camoufox_context_uses_pinning_proxy_and_route_guard():
+    launcher = FakeLauncher()
+    guard = FakeRequestGuard()
+    provider = CamoufoxProvider(
+        enabled=True,
+        idle_seconds=120,
+        semaphore=asyncio.Semaphore(2),
+        launcher=launcher,
+        egress_proxy=FakePinnedProxy(),
+        request_guard=guard,
+    )
+    await provider.fetch("https://example.com/")
+    context = launcher.sessions[0].browser.contexts[0]
+    assert context.kwargs["proxy"]["server"] == "http://127.0.0.1:41000"
+    assert guard.contexts == [context]
 
 
 @pytest.mark.asyncio

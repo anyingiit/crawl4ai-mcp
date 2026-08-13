@@ -11,6 +11,12 @@ from crawl4ai.async_configs import ProxyConfig
 from crawl4ai_mcp.cascade import CascadeEngine
 from crawl4ai_mcp.config import AppConfig
 from crawl4ai_mcp.discovery import crawl_site, map_urls
+from crawl4ai_mcp.egress import (
+    BrowserRequestGuard,
+    PinnedEgressProxy,
+    UpstreamProxy,
+    UrlPolicy,
+)
 from crawl4ai_mcp.models import Tier
 from crawl4ai_mcp.policy import PolicyStore
 from crawl4ai_mcp.providers.base import FetchProvider
@@ -39,6 +45,18 @@ def parse_proxy_url(url: str) -> ProxyConfig:
     )
 
 
+def parse_upstream_proxy(url: str) -> UpstreamProxy:
+    parts = urlsplit(url)
+    scheme = parts.scheme or "http"
+    host = parts.hostname or ""
+    port = parts.port or (443 if scheme == "https" else 80)
+    return UpstreamProxy(
+        server=f"{scheme}://{host}:{port}",
+        username=unquote(parts.username) if parts.username else None,
+        password=unquote(parts.password) if parts.password else None,
+    )
+
+
 class CrawlService:
     def __init__(
         self,
@@ -55,6 +73,9 @@ class CrawlService:
         self._reaper_task: asyncio.Task | None = None
         self._recent_failures: deque[dict] = deque(maxlen=50)
         self._close_events: list[str] = []
+        self._url_policy: UrlPolicy | None = None
+        self._egress_proxy: PinnedEgressProxy | None = None
+        self._request_guard: BrowserRequestGuard | None = None
 
     def _build_providers(
         self, enabled: set[Tier], semaphore: asyncio.Semaphore
@@ -62,21 +83,29 @@ class CrawlService:
         providers: dict[Tier, FetchProvider] = {}
         if Tier.HTTP in enabled:
             providers[Tier.HTTP] = HttpProvider(
-                concurrency=self.config.http_concurrency, timeout_seconds=10
+                policy=self._url_policy,
+                concurrency=self.config.http_concurrency,
+                timeout_seconds=10,
             )
         if Tier.STEALTH in enabled:
             providers[Tier.STEALTH] = BrowserProvider(
-                Tier.STEALTH, self.config.chromium_idle_seconds, semaphore
+                Tier.STEALTH, self.config.chromium_idle_seconds, semaphore,
+                egress_proxy=self._egress_proxy,
+                request_guard=self._request_guard,
             )
         if Tier.UNDETECTED in enabled:
             providers[Tier.UNDETECTED] = BrowserProvider(
-                Tier.UNDETECTED, self.config.chromium_idle_seconds, semaphore
+                Tier.UNDETECTED, self.config.chromium_idle_seconds, semaphore,
+                egress_proxy=self._egress_proxy,
+                request_guard=self._request_guard,
             )
         if Tier.CAMOUFOX in enabled:
             providers[Tier.CAMOUFOX] = CamoufoxProvider(
                 enabled=True,
                 idle_seconds=self.config.camoufox_idle_seconds,
                 semaphore=semaphore,
+                egress_proxy=self._egress_proxy,
+                request_guard=self._request_guard,
             )
         if Tier.PROXY in enabled:
             proxies = list(self.config.webshare_proxies) + list(
@@ -86,7 +115,9 @@ class CrawlService:
                 Tier.PROXY,
                 self.config.chromium_idle_seconds,
                 semaphore,
-                proxy_pool=[parse_proxy_url(proxy) for proxy in proxies],
+                egress_proxy=self._egress_proxy,
+                request_guard=self._request_guard,
+                proxy_pool=[parse_upstream_proxy(proxy) for proxy in proxies],
             )
         if Tier.RAYOBYTE in enabled:
             providers[Tier.RAYOBYTE] = RayobyteProvider(
@@ -104,6 +135,10 @@ class CrawlService:
             self.config.database_path_expanded,
             decay_days=self.config.policy_decay_days,
         )
+        self._url_policy = UrlPolicy()
+        self._egress_proxy = PinnedEgressProxy(self._url_policy)
+        await self._egress_proxy.start()
+        self._request_guard = BrowserRequestGuard(self._url_policy)
         if not self.providers:
             semaphore = asyncio.Semaphore(self.config.browser_concurrency)
             enabled = set(self.config.enabled_tiers)
@@ -141,6 +176,10 @@ class CrawlService:
             return_exceptions=True,
         )
         self._close_events.append("_providers_closed")
+        if self._egress_proxy is not None:
+            await self._egress_proxy.close()
+            self._egress_proxy = None
+        self._close_events.append("_egress_closed")
         if self.policy is not None:
             await self.policy.close()
             self.policy = None
@@ -183,7 +222,13 @@ class CrawlService:
     async def map(
         self, url: str, search: str | None = None, limit: int = 100
     ) -> list[str]:
-        return await map_urls(url, search=search, limit=limit)
+        return await map_urls(
+            url,
+            search=search,
+            limit=limit,
+            policy=self._url_policy,
+            proxy=self._egress_proxy,
+        )
 
     async def diagnose(self, domain: str | None = None) -> dict:
         provider_status = {}

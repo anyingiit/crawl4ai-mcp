@@ -82,7 +82,7 @@ async def test_reaper_runs_periodically(config):
 
 
 @pytest.mark.asyncio
-async def test_close_order_reaper_then_providers_then_policy(config):
+async def test_close_order_reaper_then_providers_then_egress_then_policy(config):
     close_log = []
     providers = {
         Tier.STEALTH: StubProvider(Tier.STEALTH, close_log=close_log),
@@ -90,11 +90,31 @@ async def test_close_order_reaper_then_providers_then_policy(config):
     service = await make_service(config, providers=providers, reaper_interval=0.05)
     await service.close()
     assert service._close_events == [
-        "_reaper_cancelled", "_providers_closed", "_policy_closed",
+        "_reaper_cancelled", "_providers_closed", "_egress_closed", "_policy_closed",
     ]
     assert close_log == ["STEALTH"]
     assert service.providers[Tier.STEALTH].closed is True
     assert service.policy is None
+
+
+@pytest.mark.asyncio
+async def test_service_shares_one_url_policy_egress_proxy_and_guard(config):
+    service = await make_service(config)
+    try:
+        assert service.providers[Tier.STEALTH].egress_proxy is service._egress_proxy
+        assert service.providers[Tier.UNDETECTED].egress_proxy is service._egress_proxy
+        assert service.providers[Tier.PROXY].egress_proxy is service._egress_proxy
+        assert service.providers[Tier.CAMOUFOX].egress_proxy is service._egress_proxy
+        assert service.providers[Tier.HTTP]._policy is service._url_policy
+        guard = service._request_guard
+        assert service.providers[Tier.STEALTH].request_guard is guard
+        assert service.providers[Tier.UNDETECTED].request_guard is guard
+        assert service.providers[Tier.PROXY].request_guard is guard
+        assert service.providers[Tier.CAMOUFOX].request_guard is guard
+        assert service._url_policy is not None
+        assert service._egress_proxy is not None
+    finally:
+        await service.close()
 
 
 @pytest.mark.asyncio

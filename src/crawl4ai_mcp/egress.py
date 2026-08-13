@@ -244,6 +244,28 @@ class UrlPolicy:
         )
 
 
+class BrowserRequestGuard:
+    """Intercepts every browser subresource and continues only public URLs.
+
+    Syntax and credential violations fail fast inside the browser; the
+    pinning proxy remains the enforcement point for DNS and dial safety.
+    """
+
+    def __init__(self, policy: UrlPolicy):
+        self._policy = policy
+
+    async def install(self, context) -> None:
+        await context.route("**/*", self.handle)
+
+    async def handle(self, route, request) -> None:
+        try:
+            await self._policy.resolve(request.url)
+        except UrlPolicyError:
+            await route.abort()
+        else:
+            await route.continue_()
+
+
 _MAX_HEADER_BYTES = 64 * 1024
 
 

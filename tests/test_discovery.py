@@ -1,8 +1,40 @@
+import ipaddress
+
 import pytest
+from crawl4ai.async_configs import ProxyConfig
 from crawl4ai_mcp.cascade import CascadeEngine
 from crawl4ai_mcp.discovery import crawl_site, map_urls
+from crawl4ai_mcp.egress import UrlPolicy, UrlPolicyError
 from crawl4ai_mcp.models import CostKind, FetchResult, ProviderAvailability, Tier
 from crawl4ai_mcp.policy import PolicyStore
+
+
+def public_policy(address: str = "93.184.216.34") -> UrlPolicy:
+    async def resolver(_host: str, _port: int):
+        return [ipaddress.ip_address(address)]
+    return UrlPolicy(resolver)
+
+
+def private_policy() -> UrlPolicy:
+    async def resolver(_host: str, _port: int):
+        return [ipaddress.ip_address("127.0.0.1")]
+    return UrlPolicy(resolver)
+
+
+class FakePinnedProxy:
+    def __init__(self):
+        self.endpoint_calls = []
+        self._upstream_ports = {}
+
+    def endpoint(self, upstream=None):
+        self.endpoint_calls.append(upstream)
+        if upstream is None:
+            port = 41000
+        else:
+            port = self._upstream_ports.setdefault(
+                upstream, 41001 + len(self._upstream_ports)
+            )
+        return ProxyConfig(server=f"http://127.0.0.1:{port}")
 
 
 class FakeSeeder:
@@ -26,7 +58,7 @@ def entry(url):
 def seeder_factory_for(entries):
     holder = {}
 
-    def factory():
+    def factory(client):
         seeder = FakeSeeder(entries)
         holder["seeder"] = seeder
         return seeder
@@ -35,10 +67,41 @@ def seeder_factory_for(entries):
     return factory
 
 
+class SeederFactory:
+    def __init__(self, entries=()):
+        self.entries = list(entries)
+        self.clients = []
+        self.calls = []
+
+    def __call__(self, client):
+        pool = next(iter(client._mounts.values()))._pool
+        url = pool._proxy_url
+        client.proxy_url = f"{url.scheme.decode()}://{url.host.decode()}:{url.port}"
+        self.clients.append(client)
+        seeder = FakeSeeder(self.entries)
+        self.calls.append(seeder)
+        return seeder
+
+
+@pytest.mark.asyncio
+async def test_map_urls_validates_root_before_constructing_seeder():
+    factory = SeederFactory()
+    with pytest.raises(UrlPolicyError):
+        await map_urls("http://127.0.0.1/", policy=private_policy(), proxy=FakePinnedProxy(), seeder_factory=factory)
+    assert factory.calls == []
+
+
+@pytest.mark.asyncio
+async def test_map_urls_routes_seeder_client_through_pinning_proxy():
+    factory = SeederFactory()
+    await map_urls("https://example.com/", policy=public_policy(), proxy=FakePinnedProxy(), seeder_factory=factory)
+    assert factory.clients[0].proxy_url == "http://127.0.0.1:41000"
+
+
 @pytest.mark.asyncio
 async def test_map_urls_extracts_domain_and_config():
     factory = seeder_factory_for([])
-    await map_urls("https://docs.example.com/guide", search=None, limit=100, seeder_factory=factory)
+    await map_urls("https://docs.example.com/guide", search=None, limit=100, policy=public_policy(), proxy=FakePinnedProxy(), seeder_factory=factory)
     seeder = factory.holder["seeder"]
     domain, config = seeder.calls[0]
     assert domain == "docs.example.com"
@@ -54,7 +117,7 @@ async def test_map_urls_extracts_domain_and_config():
 @pytest.mark.asyncio
 async def test_map_urls_passes_search_query():
     factory = seeder_factory_for([])
-    await map_urls("https://docs.example.com/", search="installation", limit=10, seeder_factory=factory)
+    await map_urls("https://docs.example.com/", search="installation", limit=10, policy=public_policy(), proxy=FakePinnedProxy(), seeder_factory=factory)
     config = factory.holder["seeder"].calls[0][1]
     assert config.query == "installation"
     assert config.extract_head is True
@@ -70,7 +133,7 @@ async def test_map_urls_dedups_and_filters_origin():
         entry("https://docs.example.com/b"),
         entry("https://cdn.other.net/x"),
     ])
-    urls = await map_urls("https://docs.example.com/", limit=100, seeder_factory=factory)
+    urls = await map_urls("https://docs.example.com/", limit=100, policy=public_policy(), proxy=FakePinnedProxy(), seeder_factory=factory)
     assert urls == [
         "https://docs.example.com/a",
         "https://docs.example.com/b",
@@ -81,7 +144,7 @@ async def test_map_urls_dedups_and_filters_origin():
 async def test_map_urls_hard_limits_to_100():
     entries = [entry(f"https://docs.example.com/p{i}") for i in range(500)]
     factory = seeder_factory_for(entries)
-    urls = await map_urls("https://docs.example.com/", limit=500, seeder_factory=factory)
+    urls = await map_urls("https://docs.example.com/", limit=500, policy=public_policy(), proxy=FakePinnedProxy(), seeder_factory=factory)
     assert len(urls) == 100
     assert factory.holder["seeder"].calls[0][1].max_urls == 100
 

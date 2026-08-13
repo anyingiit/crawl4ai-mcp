@@ -4,6 +4,7 @@ import asyncio
 import time
 from typing import Callable
 
+from crawl4ai_mcp.egress import BrowserRequestGuard, PinnedEgressProxy
 from crawl4ai_mcp.models import CostKind, FetchResult, ProviderAvailability, Tier
 from crawl4ai_mcp.providers.base import failed_result
 
@@ -28,7 +29,9 @@ class _CamoufoxSession:
         self.browser = session.browser
 
     async def new_context(self, **kwargs):
-        return await self.browser.new_context(**kwargs)
+        from camoufox.async_api import AsyncNewContext
+
+        return await AsyncNewContext(self.browser, **kwargs)
 
     async def close(self) -> None:
         try:
@@ -46,13 +49,18 @@ class CamoufoxProvider:
         enabled: bool = True,
         idle_seconds: int = 120,
         semaphore=None,
+        *,
         launcher: Callable | None = None,
+        egress_proxy: PinnedEgressProxy,
+        request_guard: BrowserRequestGuard,
         clock: Callable | None = None,
     ):
         self.enabled = enabled
         self.idle_seconds = idle_seconds
         self._semaphore = semaphore or asyncio.Semaphore(2)
         self._launch = launcher or _default_launch
+        self.egress_proxy = egress_proxy
+        self.request_guard = request_guard
         self._clock = clock or time.monotonic
         self._session = None
         self._last_used = 0.0
@@ -75,7 +83,11 @@ class CamoufoxProvider:
                     )
             context = None
             try:
-                context = await self._session.new_context()
+                endpoint = self.egress_proxy.endpoint()
+                context = await self._session.new_context(
+                    proxy={"server": endpoint.server}
+                )
+                await self.request_guard.install(context)
                 page = await context.new_page()
                 response = await page.goto(
                     url, wait_until="domcontentloaded", timeout=60_000

@@ -1,13 +1,18 @@
 from __future__ import annotations
 
 import time
-from typing import Callable
+from typing import Callable, Sequence
 
 from crawl4ai import AsyncWebCrawler
-from crawl4ai.async_configs import BrowserConfig, ProxyConfig
+from crawl4ai.async_configs import (
+    BrowserConfig,
+    CacheMode,
+    CrawlerRunConfig,
+)
 from crawl4ai.async_crawler_strategy import AsyncPlaywrightCrawlerStrategy
 from crawl4ai.browser_adapter import UndetectedAdapter
 
+from crawl4ai_mcp.egress import BrowserRequestGuard, PinnedEgressProxy, UpstreamProxy
 from crawl4ai_mcp.models import CostKind, FetchResult, ProviderAvailability, Tier
 from crawl4ai_mcp.providers.base import failed_result
 
@@ -26,15 +31,13 @@ def _undetected_config() -> BrowserConfig:
     )
 
 
-def default_factory(tier: Tier, proxy: ProxyConfig | None = None) -> AsyncWebCrawler:
+def default_factory(tier: Tier) -> AsyncWebCrawler:
     if tier == Tier.STEALTH:
         config = _stealth_config()
         return AsyncWebCrawler(
             crawler_strategy=AsyncPlaywrightCrawlerStrategy(browser_config=config)
         )
     config = _undetected_config()
-    if proxy is not None:
-        config.proxy_config = proxy
     return AsyncWebCrawler(
         crawler_strategy=AsyncPlaywrightCrawlerStrategy(
             browser_config=config,
@@ -52,7 +55,10 @@ class BrowserProvider:
         tier: Tier,
         idle_seconds: int,
         semaphore,
-        proxy_pool=(),
+        *,
+        egress_proxy: PinnedEgressProxy,
+        request_guard: BrowserRequestGuard,
+        proxy_pool: Sequence[UpstreamProxy] = (),
         factory: Callable | None = None,
         clock: Callable | None = None,
     ):
@@ -60,9 +66,11 @@ class BrowserProvider:
         self.tier = tier
         self.idle_seconds = idle_seconds
         self._semaphore = semaphore
+        self.egress_proxy = egress_proxy
+        self.request_guard = request_guard
         self.proxy_pool = list(proxy_pool)
         self._proxy_index = 0
-        self._factory = factory or (lambda proxy: default_factory(self.tier, proxy))
+        self._factory = factory or (lambda: default_factory(self.tier))
         self._clock = clock or time.monotonic
         self.cost_kind = (
             CostKind.PROXY_BANDWIDTH if tier == Tier.PROXY else CostKind.FREE
@@ -70,21 +78,43 @@ class BrowserProvider:
         self._crawler = None
         self._last_used = 0.0
 
-    def _next_proxy(self) -> ProxyConfig | None:
+    def _next_upstream(self) -> UpstreamProxy | None:
         if self.tier != Tier.PROXY or not self.proxy_pool:
             return None
-        proxy = self.proxy_pool[self._proxy_index % len(self.proxy_pool)]
+        upstream = self.proxy_pool[self._proxy_index % len(self.proxy_pool)]
         self._proxy_index += 1
-        return proxy
+        return upstream
+
+    def _run_config(self) -> CrawlerRunConfig:
+        upstream = self._next_upstream()
+        return CrawlerRunConfig(
+            proxy_config=self.egress_proxy.endpoint(upstream),
+            cache_mode=CacheMode.BYPASS,
+        )
+
+    def _install_guard(self) -> None:
+        strategy = getattr(self._crawler, "crawler_strategy", None)
+        set_hook = getattr(strategy, "set_hook", None)
+        if set_hook is None:
+            return
+        try:
+            set_hook("on_page_context_created", self._on_page_context_created)
+        except ValueError:
+            pass
+
+    async def _on_page_context_created(self, page, *, context=None, config=None):
+        if context is not None:
+            await self.request_guard.install(context)
 
     async def fetch(self, url: str) -> FetchResult:
         started = time.monotonic()
         async with self._semaphore:
             if self._crawler is None:
-                proxy = self._next_proxy()
-                self._crawler = self._factory(proxy)
+                self._crawler = self._factory()
+                self._install_guard()
+            config = self._run_config()
             try:
-                container = await self._crawler.arun(url=url, config=None)
+                container = await self._crawler.arun(url=url, config=config)
                 results = getattr(container, "_results", container)
                 result = results[0] if isinstance(results, list) else results
                 self._last_used = self._clock()
@@ -92,7 +122,7 @@ class BrowserProvider:
                     url=url,
                     tier=self.tier,
                     cost_kind=self.cost_kind,
-                    status_code=getattr(result, "status_code", None),
+                    target_status_code=getattr(result, "status_code", None),
                     html=getattr(result, "html", "") or "",
                     headers=dict(getattr(result, "response_headers", None) or {}),
                     redirected_url=getattr(result, "redirected_url", None),

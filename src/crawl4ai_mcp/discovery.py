@@ -4,8 +4,10 @@ from collections import deque
 from fnmatch import fnmatch
 from urllib.parse import urlsplit, urlunsplit, urljoin
 
+import httpx
 from bs4 import BeautifulSoup
 
+from crawl4ai_mcp.egress import PinnedEgressProxy, UrlPolicy
 from crawl4ai_mcp.models import ScrapeResult, Tier
 
 MAX_MAP_URLS = 100
@@ -26,15 +28,31 @@ async def map_urls(
     url: str,
     search: str | None = None,
     limit: int = 100,
+    *,
+    policy: UrlPolicy,
+    proxy: PinnedEgressProxy,
     seeder_factory=None,
 ) -> list[str]:
     limit = min(limit, MAX_MAP_URLS)
     domain = _hostname(url)
 
+    await policy.resolve(url)
+
     from crawl4ai.async_configs import SeedingConfig
     from crawl4ai.async_url_seeder import AsyncUrlSeeder
 
-    seeder = seeder_factory() if seeder_factory is not None else AsyncUrlSeeder()
+    endpoint = proxy.endpoint()
+    client = httpx.AsyncClient(
+        proxy=endpoint.server,
+        trust_env=False,
+        follow_redirects=True,
+        timeout=30,
+    )
+    seeder = (
+        seeder_factory(client)
+        if seeder_factory is not None
+        else AsyncUrlSeeder(client=client)
+    )
     try:
         config = SeedingConfig(
             source="sitemap+cc",
@@ -47,6 +65,7 @@ async def map_urls(
         entries = await seeder.urls(domain, config)
     finally:
         await seeder.close()
+        await client.aclose()
 
     seen: set[str] = set()
     urls: list[str] = []
