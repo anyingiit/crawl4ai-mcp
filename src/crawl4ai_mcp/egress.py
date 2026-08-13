@@ -4,6 +4,7 @@ import asyncio
 import base64
 import ipaddress
 import socket
+import ssl
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import Awaitable, Callable, Sequence
@@ -279,11 +280,15 @@ def build_upstream_connect(
 
 
 def _parse_upstream_server(upstream: UpstreamProxy) -> tuple[str, int, bool]:
-    parts = urlsplit(upstream.server if "://" in upstream.server else f"http://{upstream.server}")
+    server = upstream.server
+    if "://" not in server:
+        server = f"http://{server}"
+    parts = urlsplit(server)
     scheme = parts.scheme.lower() or "http"
     host = parts.hostname or ""
     if not host:
-        raise UrlPolicyError(UrlPolicyReason.INVALID_HOST, upstream.server, "missing proxy host")
+        label = server.split("@")[-1] if "@" in server else server
+        raise UrlPolicyError(UrlPolicyReason.INVALID_HOST, label, "missing proxy host")
     port = parts.port or (443 if scheme == "https" else 80)
     return host, port, scheme == "https"
 
@@ -404,7 +409,8 @@ class PinnedEgressProxy:
         last_error: Exception | None = None
         for address in target.addresses:
             try:
-                return await self._dial(str(address), port)
+                reader, writer = await self._dial(str(address), port)
+                return reader, writer, b""
             except Exception as exc:
                 last_error = exc
         raise OSError(f"all validated addresses failed: {last_error}") from last_error
@@ -429,15 +435,26 @@ class PinnedEgressProxy:
                 request = build_upstream_connect(str(address), port, upstream)
                 remote_writer.write(request)
                 await remote_writer.drain()
-                head = await self._read_head(remote_reader)
+                head, early = await self._read_head(remote_reader)
                 if head is None:
                     raise OSError("upstream closed during CONNECT handshake")
                 status = int(head.split(b"\r\n", 1)[0].split(b" ", 2)[1])
                 if status == 200:
-                    return remote_reader, remote_writer
+                    return remote_reader, remote_writer, early
                 if status == 407:
                     raise OSError("upstream proxy requires authentication")
                 raise OSError(f"upstream proxy rejected CONNECT with status {status}")
+            except UrlPolicyError:
+                if remote_writer is not None:
+                    try:
+                        remote_writer.close()
+                    except Exception:
+                        pass
+                    try:
+                        await remote_writer.wait_closed()
+                    except Exception:
+                        pass
+                raise
             except Exception as exc:
                 last_error = exc
                 if remote_writer is not None:
@@ -454,9 +471,42 @@ class PinnedEgressProxy:
     async def _dial_upstream(
         self, host: str, port: int, use_tls: bool
     ) -> tuple:
-        if self._connect is not None:
-            return await self._connect(host, port)
-        return await asyncio.open_connection(host, port, ssl=use_tls or None)
+        target = await self._policy.resolve(_connect_probe_url(host, port))
+        ssl_context = ssl.create_default_context() if use_tls else None
+        last_error: Exception | None = None
+        for address in target.addresses:
+            try:
+                if self._connect is not None:
+                    return await self._connect(
+                        str(address),
+                        port,
+                        ssl=ssl_context,
+                        server_hostname=host if use_tls else None,
+                    )
+                return await asyncio.open_connection(
+                    str(address),
+                    port,
+                    ssl=ssl_context,
+                    server_hostname=host if use_tls else None,
+                )
+            except Exception as exc:
+                last_error = exc
+        raise OSError(
+            f"all validated upstream proxy addresses failed: {last_error}"
+        ) from last_error
+
+    @staticmethod
+    async def _close_remote(writer: asyncio.StreamWriter | None) -> None:
+        if writer is None:
+            return
+        try:
+            writer.close()
+        except Exception:
+            pass
+        try:
+            await writer.wait_closed()
+        except Exception:
+            pass
 
     async def _serve(
         self,
@@ -466,7 +516,7 @@ class PinnedEgressProxy:
     ) -> None:
         self._connections.add(writer)
         try:
-            head = await self._read_head(reader, writer)
+            head, remainder = await self._read_head(reader, writer)
             if head is None:
                 return
             request_line, _, header_block = head.partition(b"\r\n")
@@ -478,11 +528,11 @@ class PinnedEgressProxy:
             target = parts[1].decode("latin-1")
             if method.upper() == "CONNECT":
                 await self._handle_connect(
-                    target, header_block, reader, writer, upstream
+                    target, header_block, reader, writer, upstream, remainder
                 )
             else:
                 await self._handle_absolute_form(
-                    method, target, header_block, reader, writer, upstream
+                    method, target, header_block, reader, writer, upstream, remainder
                 )
         finally:
             try:
@@ -499,19 +549,26 @@ class PinnedEgressProxy:
         self,
         reader: asyncio.StreamReader,
         writer: asyncio.StreamWriter | None = None,
-    ) -> bytes | None:
+    ) -> tuple[bytes | None, bytes]:
         head = b""
-        while b"\r\n\r\n" not in head:
-            if len(head) > _MAX_HEADER_BYTES:
+        while True:
+            terminator = head.find(b"\r\n\r\n")
+            if terminator >= 0:
+                end = terminator + 4
+                if end > _MAX_HEADER_BYTES:
+                    if writer is not None:
+                        await self._reject(writer, 431, "request header fields too large")
+                    return None, b""
+                return head[:end], head[end:]
+            if len(head) >= _MAX_HEADER_BYTES:
                 if writer is not None:
                     await self._reject(writer, 431, "request header fields too large")
-                return None
-            remaining = _MAX_HEADER_BYTES + 1 - len(head)
-            chunk = await reader.read(min(4096, max(1, remaining)))
+                return None, b""
+            remaining = _MAX_HEADER_BYTES - len(head)
+            chunk = await reader.read(min(4096, remaining))
             if not chunk:
-                return None
+                return None, b""
             head += chunk
-        return head
 
     async def _reject(self, writer: asyncio.StreamWriter, status: int, reason: str) -> None:
         body = f"{status} {reason}".encode()
@@ -533,6 +590,7 @@ class PinnedEgressProxy:
         reader: asyncio.StreamReader,
         writer: asyncio.StreamWriter,
         upstream: UpstreamProxy | None,
+        remainder: bytes,
     ) -> None:
         try:
             try:
@@ -550,9 +608,11 @@ class PinnedEgressProxy:
             if host.startswith("[") and host.endswith("]"):
                 host = host[1:-1]
             if upstream is None:
-                remote_reader, remote_writer = await self._open_direct_tunnel(host, port)
+                remote_reader, remote_writer, early = await self._open_direct_tunnel(
+                    host, port
+                )
             else:
-                remote_reader, remote_writer = await self._open_upstream_tunnel(
+                remote_reader, remote_writer, early = await self._open_upstream_tunnel(
                     host, port, upstream
                 )
         except UrlPolicyError as exc:
@@ -563,12 +623,14 @@ class PinnedEgressProxy:
             return
         try:
             writer.write(b"HTTP/1.1 200 Connection established\r\n\r\n")
+            if early:
+                writer.write(early)
             await writer.drain()
+            if remainder:
+                remote_writer.write(remainder)
+                await remote_writer.drain()
         except Exception:
-            try:
-                remote_writer.close()
-            except Exception:
-                pass
+            await self._close_remote(remote_writer)
             return
         await self._relay(reader, writer, remote_reader, remote_writer)
 
@@ -580,6 +642,7 @@ class PinnedEgressProxy:
         reader: asyncio.StreamReader,
         writer: asyncio.StreamWriter,
         upstream: UpstreamProxy | None,
+        remainder: bytes,
     ) -> None:
         try:
             resolved = await self._policy.resolve(target)
@@ -593,20 +656,30 @@ class PinnedEgressProxy:
         headers = self._parse_header_lines(header_block)
         if not any(name.lower() == "host" for name, _value in headers):
             headers.insert(0, ("Host", parts.netloc))
-        outgoing = self._build_request(method, origin_form, headers, upstream)
+        outgoing = self._build_request(method, origin_form, headers)
+        remote_writer: asyncio.StreamWriter | None = None
         try:
             if upstream is None:
-                remote_reader, remote_writer = await self._open_direct_tunnel(
+                remote_reader, remote_writer, early = await self._open_direct_tunnel(
                     resolved.host, resolved.port
                 )
             else:
-                up_host, up_port, use_tls = _parse_upstream_server(upstream)
-                remote_reader, remote_writer = await self._dial_upstream(
-                    up_host, up_port, use_tls
+                remote_reader, remote_writer, early = await self._open_upstream_tunnel(
+                    resolved.host, resolved.port, upstream
                 )
             remote_writer.write(outgoing)
+            if remainder:
+                remote_writer.write(remainder)
             await remote_writer.drain()
+            if early:
+                writer.write(early)
+                await writer.drain()
+        except UrlPolicyError as exc:
+            await self._close_remote(remote_writer)
+            await self._reject(writer, 403, str(exc))
+            return
         except Exception as exc:
+            await self._close_remote(remote_writer)
             await self._reject(writer, 502, f"tunnel failed: {exc}")
             return
         await self._relay(reader, writer, remote_reader, remote_writer)
@@ -629,16 +702,12 @@ class PinnedEgressProxy:
         method: str,
         origin_form: str,
         headers: list[tuple[str, str]],
-        upstream: UpstreamProxy | None,
     ) -> bytes:
         lines = [f"{method} {origin_form} HTTP/1.1"]
         for name, value in headers:
             if name.lower() == "proxy-authorization":
                 continue
             lines.append(f"{name}: {value}")
-        auth = _basic_auth(upstream) if upstream is not None else None
-        if auth is not None:
-            lines.append(f"Proxy-Authorization: {auth}")
         return ("\r\n".join(lines) + "\r\n\r\n").encode("latin-1")
 
     @staticmethod

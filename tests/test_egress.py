@@ -437,8 +437,8 @@ async def test_proxy_forwards_connect_with_pinned_ip_and_own_auth_only():
     upstream_started.set_result(upstream_port)
     upstream_task = asyncio.create_task(upstream_server.serve_forever())
 
-    upstream = UpstreamProxy(f"http://127.0.0.1:{upstream_port}", "u", "p")
-    proxy = PinnedEgressProxy(public_policy("93.184.216.34"))
+    upstream = UpstreamProxy(f"http://upstream.local:{upstream_port}", "u", "p")
+    proxy = PinnedEgressProxy(UpstreamLoopbackPolicy())
     await proxy.start()
     try:
         reader, writer = await _connect_to(proxy.endpoint(upstream))
@@ -482,5 +482,293 @@ async def test_proxy_rejects_malformed_connect_target_with_403():
         response = await reader.readuntil(b"\r\n\r\n")
         assert response.startswith(b"HTTP/1.1 403")
         writer.close()
+    finally:
+        await proxy.close()
+
+
+class UpstreamLoopbackPolicy(UrlPolicy):
+    """Test-only: 'upstream.local' dials 127.0.0.1; other hosts resolve publicly."""
+
+    async def resolve(self, url):
+        validated = parse_public_url(url)
+        if validated.host == "upstream.local":
+            addresses = (ipaddress.ip_address("127.0.0.1"),)
+        else:
+            addresses = (ipaddress.ip_address("93.184.216.34"),)
+        return ResolvedTarget(
+            url=validated,
+            host=validated.host,
+            port=validated.port,
+            addresses=addresses,
+        )
+
+
+class FailingWriter(FakeWriter):
+    def __init__(self):
+        super().__init__()
+        self.closed = False
+        self.wait_closed_called = False
+
+    def write(self, data):
+        raise OSError("write failed")
+
+    def close(self):
+        self.closed = True
+
+    async def wait_closed(self):
+        self.wait_closed_called = True
+
+
+@pytest.mark.asyncio
+async def test_proxy_upstream_http_tunnels_to_validated_ip_and_preserves_host():
+    received = {}
+
+    async def handle(reader, writer):
+        try:
+            received["connect"] = await asyncio.wait_for(
+                reader.readuntil(b"\r\n\r\n"), 5
+            )
+            writer.write(b"HTTP/1.1 200 Connection established\r\n\r\n")
+            await writer.drain()
+            received["request"] = await asyncio.wait_for(
+                reader.readuntil(b"\r\n\r\n"), 5
+            )
+            body = b"<main>proxied</main>"
+            writer.write(
+                b"HTTP/1.1 200 OK\r\nContent-Length: 19\r\nConnection: close\r\n\r\n"
+                + body
+            )
+            await writer.drain()
+        except Exception:
+            pass
+        finally:
+            try:
+                writer.close()
+            except Exception:
+                pass
+
+    upstream_server = await asyncio.start_server(handle, "127.0.0.1", 0)
+    upstream_port = upstream_server.sockets[0].getsockname()[1]
+    serve_task = asyncio.create_task(upstream_server.serve_forever())
+    upstream = UpstreamProxy(f"http://upstream.local:{upstream_port}")
+    proxy = PinnedEgressProxy(UpstreamLoopbackPolicy())
+    await proxy.start()
+    try:
+        reader, writer = await _connect_to(proxy.endpoint(upstream))
+        writer.write(
+            b"GET http://example.com/path?q=1 HTTP/1.1\r\n"
+            b"Host: example.com\r\n"
+            b"Proxy-Authorization: Basic Y2FsbGVy\r\n\r\n"
+        )
+        await writer.drain()
+        response = await asyncio.wait_for(reader.readuntil(b"\r\n\r\n"), 5)
+        assert response.startswith(b"HTTP/1.1 200 OK")
+        writer.close()
+        assert received["connect"].startswith(
+            b"CONNECT 93.184.216.34:80 HTTP/1.1\r\n"
+        )
+        assert received["request"].startswith(b"GET /path?q=1 HTTP/1.1\r\n")
+        assert b"Host: example.com" in received["request"]
+        assert b"Proxy-Authorization" not in received["request"]
+    finally:
+        await proxy.close()
+        upstream_server.close()
+        await upstream_server.wait_closed()
+        serve_task.cancel()
+        try:
+            await serve_task
+        except asyncio.CancelledError:
+            pass
+
+
+@pytest.mark.asyncio
+async def test_proxy_forwards_request_body_read_with_headers():
+    received = {}
+
+    async def handle(reader, writer):
+        try:
+            received["request"] = await asyncio.wait_for(
+                reader.readuntil(b"\r\n\r\n"), 5
+            )
+            received["body"] = await asyncio.wait_for(reader.readexactly(5), 5)
+            writer.write(
+                b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok"
+            )
+            await writer.drain()
+        except Exception:
+            pass
+        finally:
+            try:
+                writer.close()
+            except Exception:
+                pass
+
+    target_server = await asyncio.start_server(handle, "127.0.0.1", 0)
+    target_port = target_server.sockets[0].getsockname()[1]
+    serve_task = asyncio.create_task(target_server.serve_forever())
+    proxy = PinnedEgressProxy(LocalPolicy())
+    await proxy.start()
+    try:
+        reader, writer = await _connect_to(proxy.endpoint())
+        target = f"127.0.0.1:{target_port}"
+        writer.write(
+            f"POST http://{target}/submit HTTP/1.1\r\n"
+            f"Host: {target}\r\n"
+            f"Content-Length: 5\r\n\r\nhello".encode()
+        )
+        await writer.drain()
+        response = await asyncio.wait_for(reader.readuntil(b"\r\n\r\n"), 5)
+        assert response.startswith(b"HTTP/1.1 200 OK")
+        writer.close()
+        assert received["body"] == b"hello"
+        assert received["request"].endswith(b"Content-Length: 5\r\n\r\n")
+    finally:
+        await proxy.close()
+        target_server.close()
+        await target_server.wait_closed()
+        serve_task.cancel()
+        try:
+            await serve_task
+        except asyncio.CancelledError:
+            pass
+
+
+@pytest.mark.asyncio
+async def test_proxy_forwards_early_connect_payload_after_handshake():
+    echo_started = asyncio.Future()
+    echo_task = asyncio.create_task(_echo_server(echo_started))
+    target_port = await echo_started
+    proxy = PinnedEgressProxy(LocalPolicy())
+    await proxy.start()
+    try:
+        reader, writer = await _connect_to(proxy.endpoint())
+        writer.write(
+            f"CONNECT 127.0.0.1:{target_port} HTTP/1.1\r\n"
+            f"Host: 127.0.0.1:{target_port}\r\n\r\nearly-tls".encode()
+        )
+        await writer.drain()
+        assert await asyncio.wait_for(reader.readuntil(b"\r\n\r\n"), 5) == (
+            b"HTTP/1.1 200 Connection established\r\n\r\n"
+        )
+        assert await asyncio.wait_for(reader.readexactly(9), 5) == b"early-tls"
+        writer.close()
+    finally:
+        await proxy.close()
+        echo_task.cancel()
+        try:
+            await echo_task
+        except asyncio.CancelledError:
+            pass
+
+
+def _connect_head(total: int) -> bytes:
+    prefix = b"CONNECT example.com:443 HTTP/1.1\r\nX-Filler: "
+    return prefix + b"X" * (total - 4 - len(prefix)) + b"\r\n\r\n"
+
+
+@pytest.mark.parametrize("total", [65536, 65537])
+@pytest.mark.asyncio
+async def test_proxy_enforces_exact_64_kib_header_cap(total):
+    async def connect(host, port, **_kwargs):
+        return FakeReader(), FakeWriter()
+    proxy = PinnedEgressProxy(public_policy(), connect=connect)
+    await proxy.start()
+    try:
+        reader, writer = await _connect_to(proxy.endpoint())
+        writer.write(_connect_head(total))
+        await writer.drain()
+        response = await asyncio.wait_for(reader.readuntil(b"\r\n\r\n"), 5)
+        if total == 65536:
+            assert response == b"HTTP/1.1 200 Connection established\r\n\r\n"
+        else:
+            assert response.startswith(b"HTTP/1.1 431")
+        writer.close()
+    finally:
+        await proxy.close()
+
+
+@pytest.mark.asyncio
+async def test_proxy_closes_remote_writer_when_setup_write_fails():
+    fake_writer = FailingWriter()
+
+    async def connect(host, port, **_kwargs):
+        return FakeReader(), fake_writer
+    proxy = PinnedEgressProxy(public_policy(), connect=connect)
+    await proxy.start()
+    try:
+        reader, writer = await _connect_to(proxy.endpoint())
+        writer.write(b"GET http://example.com/ HTTP/1.1\r\nHost: example.com\r\n\r\n")
+        await writer.drain()
+        response = await asyncio.wait_for(reader.readuntil(b"\r\n\r\n"), 5)
+        assert response.startswith(b"HTTP/1.1 502")
+        writer.close()
+        assert fake_writer.closed is True
+        assert fake_writer.wait_closed_called is True
+    finally:
+        await proxy.close()
+
+
+@pytest.mark.asyncio
+async def test_proxy_rejects_upstream_proxy_with_private_dns_answers():
+    calls = []
+
+    async def resolver(host, _port):
+        if host == "proxy.example":
+            return [
+                ipaddress.ip_address("93.184.216.34"),
+                ipaddress.ip_address("127.0.0.1"),
+            ]
+        return [ipaddress.ip_address("93.184.216.34")]
+
+    async def connect(host, port, **_kwargs):
+        calls.append((host, port))
+        return FakeReader(), FakeWriter()
+
+    proxy = PinnedEgressProxy(UrlPolicy(resolver), connect=connect)
+    await proxy.start()
+    try:
+        upstream = UpstreamProxy("http://proxy.example:8080")
+        reader, writer = await _connect_to(proxy.endpoint(upstream))
+        writer.write(
+            b"CONNECT example.com:443 HTTP/1.1\r\nHost: example.com:443\r\n\r\n"
+        )
+        await writer.drain()
+        response = await asyncio.wait_for(reader.readuntil(b"\r\n\r\n"), 5)
+        assert response.startswith(b"HTTP/1.1 403")
+        writer.close()
+        assert calls == []
+    finally:
+        await proxy.close()
+
+
+@pytest.mark.asyncio
+async def test_proxy_dials_https_upstream_by_pinned_ip_with_sni():
+    calls = []
+
+    async def resolver(host, _port):
+        if host == "proxy.example":
+            return [ipaddress.ip_address("93.184.216.35")]
+        return [ipaddress.ip_address("93.184.216.34")]
+
+    async def connect(host, port, **_kwargs):
+        calls.append((host, port, _kwargs))
+        return FakeReader(), FakeWriter()
+
+    proxy = PinnedEgressProxy(UrlPolicy(resolver), connect=connect)
+    await proxy.start()
+    try:
+        upstream = UpstreamProxy("https://proxy.example:8443")
+        reader, writer = await _connect_to(proxy.endpoint(upstream))
+        writer.write(
+            b"CONNECT example.com:443 HTTP/1.1\r\nHost: example.com:443\r\n\r\n"
+        )
+        await writer.drain()
+        response = await asyncio.wait_for(reader.readuntil(b"\r\n\r\n"), 5)
+        assert response.startswith(b"HTTP/1.1 502")
+        writer.close()
+        assert len(calls) == 1
+        assert calls[0][:2] == ("93.184.216.35", 8443)
+        assert calls[0][2].get("ssl") is not None
+        assert calls[0][2].get("server_hostname") == "proxy.example"
     finally:
         await proxy.close()
