@@ -572,3 +572,68 @@ async def test_camoufox_context_failure_is_not_network_error():
     finally:
         FakeContext.new_page = original_new_page
         await provider.close()
+
+
+@pytest.mark.asyncio
+async def test_camoufox_reap_cancellation_does_not_leak_session(provider, gate, clock):
+    fetch = asyncio.create_task(provider.fetch("https://example.com/a"))
+    await provider.launcher.started.wait()
+    gate.set()
+    await fetch
+    clock.advance(121)
+    provider.launcher.close_gate = asyncio.Event()
+    reap = asyncio.create_task(provider.reap_idle())
+    await provider.launcher.close_started.wait()
+    reap.cancel()
+    await reap
+    assert provider.launcher.sessions[0].closed is False
+    provider.launcher.close_gate.set()
+    await asyncio.wait_for(provider.close(), timeout=5)
+    assert provider.launcher.sessions[0].closed is True
+
+
+@pytest.mark.asyncio
+async def test_camoufox_close_after_reap_waits_and_stays_closed(provider, gate, clock):
+    fetch = asyncio.create_task(provider.fetch("https://example.com/a"))
+    await provider.launcher.started.wait()
+    gate.set()
+    await fetch
+    clock.advance(121)
+    provider.launcher.close_gate = asyncio.Event()
+    reap = asyncio.create_task(provider.reap_idle())
+    await provider.launcher.close_started.wait()
+    close = asyncio.create_task(provider.close())
+    await asyncio.sleep(0)
+    assert not close.done()
+    provider.launcher.close_gate.set()
+    await asyncio.wait_for(asyncio.gather(reap, close), timeout=5)
+    assert provider.launcher.sessions[0].closed is True
+    result = await provider.fetch("https://example.com/b")
+    assert result.error is not None and "closed" in (result.error or "")
+    assert provider.launcher.calls == 1
+
+
+@pytest.mark.asyncio
+async def test_camoufox_fetch_after_terminal_close_rejects_without_launching(provider, gate):
+    fetch = asyncio.create_task(provider.fetch("https://example.com/a"))
+    await provider.launcher.started.wait()
+    gate.set()
+    await fetch
+    await provider.close()
+    result = await provider.fetch("https://example.com/b")
+    assert result.error is not None and "closed" in (result.error or "")
+    assert provider.launcher.calls == 1
+    await provider.close()
+    assert provider.launcher.sessions[0].closed is True
+
+
+@pytest.mark.asyncio
+async def test_camoufox_reap_after_terminal_close_is_noop(provider, gate, clock):
+    fetch = asyncio.create_task(provider.fetch("https://example.com/a"))
+    await provider.launcher.started.wait()
+    gate.set()
+    await fetch
+    await provider.close()
+    clock.advance(121)
+    await provider.reap_idle()
+    assert provider.launcher.sessions[0].closed is True

@@ -827,3 +827,56 @@ async def test_aborted_subresource_alone_is_not_main_frame_policy_error(fake_clo
     finally:
         FakeCrawler.arun = original_arun
         await provider.close()
+
+
+@pytest.mark.asyncio
+async def test_browser_reap_cancellation_does_not_leak_crawler(provider, clock):
+    await provider.fetch("https://example.com/a")
+    clock.advance(181)
+    provider.factory.close_gate = asyncio.Event()
+    reap = asyncio.create_task(provider.reap_idle())
+    await provider.factory.close_started.wait()
+    reap.cancel()
+    await reap
+    assert provider.factory.closed == 0
+    provider.factory.close_gate.set()
+    await asyncio.wait_for(provider.close(), timeout=5)
+    assert provider.factory.closed == 1
+
+
+@pytest.mark.asyncio
+async def test_browser_close_after_reap_waits_and_stays_closed(provider, clock):
+    await provider.fetch("https://example.com/a")
+    clock.advance(181)
+    provider.factory.close_gate = asyncio.Event()
+    reap = asyncio.create_task(provider.reap_idle())
+    await provider.factory.close_started.wait()
+    close = asyncio.create_task(provider.close())
+    await asyncio.sleep(0)
+    assert not close.done()
+    provider.factory.close_gate.set()
+    await asyncio.wait_for(asyncio.gather(reap, close), timeout=5)
+    assert provider.factory.closed == 1
+    result = await provider.fetch("https://example.com/b")
+    assert result.error is not None and "closed" in (result.error or "")
+    assert provider.factory.created == 1
+
+
+@pytest.mark.asyncio
+async def test_browser_fetch_after_terminal_close_rejects_without_creating(provider):
+    await provider.fetch("https://example.com/a")
+    await provider.close()
+    result = await provider.fetch("https://example.com/b")
+    assert result.error is not None and "closed" in (result.error or "")
+    assert provider.factory.created == 1
+    await provider.close()
+    assert provider.factory.closed == 1
+
+
+@pytest.mark.asyncio
+async def test_browser_reap_after_terminal_close_is_noop(provider, clock):
+    await provider.fetch("https://example.com/a")
+    await provider.close()
+    clock.advance(181)
+    await provider.reap_idle()
+    assert provider.factory.closed == 1

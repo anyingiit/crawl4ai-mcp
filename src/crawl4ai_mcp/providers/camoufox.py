@@ -69,7 +69,9 @@ class CamoufoxProvider:
         self._lifecycle = asyncio.Condition()
         self._active_fetches = 0
         self._closing = False
+        self._closed = False
         self._close_task: asyncio.Task | None = None
+        self._close_tasks: set[asyncio.Task] = set()
 
     async def fetch(self, url: str) -> FetchResult:
         started = time.monotonic()
@@ -79,6 +81,10 @@ class CamoufoxProvider:
             )
         async with self._semaphore:
             async with self._lifecycle:
+                if self._closed:
+                    return failed_result(
+                        url, self.tier, self.cost_kind, "provider closed", started
+                    )
                 if self._closing:
                     return failed_result(
                         url, self.tier, self.cost_kind, "provider closing", started
@@ -164,27 +170,41 @@ class CamoufoxProvider:
     async def reap_idle(self, now: float | None = None) -> None:
         now = self._clock() if now is None else now
         async with self._lifecycle:
-            if self._closing or self._active_fetches > 0:
+            if self._closed or self._closing or self._active_fetches > 0:
                 return
             if self._session is None or now - self._last_used < self.idle_seconds:
                 return
             session = self._session
             self._session = None
-        if session is not None:
-            try:
-                await session.close()
-            except Exception:
-                pass
+            task = asyncio.create_task(self._close_session(session))
+            self._close_tasks.add(task)
+            task.add_done_callback(self._close_tasks.discard)
+        try:
+            await asyncio.shield(task)
+        except asyncio.CancelledError:
+            pass
+
+    async def _close_session(self, session) -> None:
+        try:
+            await session.close()
+        except Exception:
+            pass
 
     async def close(self) -> None:
         async with self._lifecycle:
             if self._close_task is not None:
                 task = self._close_task
+            elif self._closed:
+                task = None
             else:
                 self._closing = True
                 task = asyncio.create_task(self._close_resource())
                 self._close_task = task
-        await asyncio.shield(task)
+        if task is not None:
+            await asyncio.shield(task)
+        pending = list(self._close_tasks)
+        if pending:
+            await asyncio.gather(*pending, return_exceptions=True)
 
     async def _close_resource(self) -> None:
         try:
@@ -201,6 +221,7 @@ class CamoufoxProvider:
         finally:
             async with self._lifecycle:
                 self._closing = False
+                self._closed = True
                 self._close_task = None
                 self._lifecycle.notify_all()
 
