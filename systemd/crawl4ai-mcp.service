@@ -1,0 +1,23 @@
+[Unit]
+Description=crawl4ai-mcp localhost scraping service
+Documentation=docs/operations.md
+
+[Service]
+Type=exec
+WorkingDirectory=%h/Workspace/crawl4ai-mcp
+EnvironmentFile=%h/Workspace/crawl4ai-mcp/.env
+ExecStart=%h/Workspace/crawl4ai-mcp/.venv/bin/crawl4ai-mcp
+Restart=always
+RestartSec=5
+TimeoutStopSec=30
+MemoryHigh=1536M
+MemoryMax=2560M
+MemorySwapMax=0
+KillMode=control-group
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+SyslogIdentifier=crawl4ai-mcp
+
+[Install]
+WantedBy=default.target
