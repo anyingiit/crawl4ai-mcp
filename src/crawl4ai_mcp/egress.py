@@ -18,6 +18,9 @@ _NAT64_WELL_KNOWN = ipaddress.IPv6Network("64:ff9b::/96")
 _NAT64_LOCAL_USE = ipaddress.IPv6Network("64:ff9b:1::/48")
 _ISATAP_IDENTIFIERS = (b"\x00\x00\x5e\xfe", b"\x02\x00\x5e\xfe")
 
+_HOSTNAME_MAX_LENGTH = 253
+_LABEL_MAX_LENGTH = 63
+
 
 class UrlPolicyReason(StrEnum):
     INVALID_URL = "invalid_url"
@@ -67,6 +70,8 @@ class ResolvedTarget:
 
 
 def parse_public_url(url: str) -> ValidatedUrl:
+    if any(ord(char) < 0x20 or ord(char) == 0x7F for char in url):
+        raise UrlPolicyError(UrlPolicyReason.INVALID_URL, url, "control characters")
     try:
         parts = urlsplit(url)
     except ValueError as exc:
@@ -88,10 +93,19 @@ def parse_public_url(url: str) -> ValidatedUrl:
     if hostname.startswith("[") and hostname.endswith("]"):
         hostname = hostname[1:-1]
     if ":" in hostname:
+        if "%" in hostname:
+            raise UrlPolicyError(
+                UrlPolicyReason.INVALID_HOST, url, "ipv6 zone id is not allowed"
+            )
         try:
-            host = ipaddress.IPv6Address(hostname).compressed
+            address = ipaddress.IPv6Address(hostname)
         except ValueError as exc:
             raise UrlPolicyError(UrlPolicyReason.INVALID_HOST, url, str(exc)) from exc
+        if address.scope_id:
+            raise UrlPolicyError(
+                UrlPolicyReason.INVALID_HOST, url, "ipv6 zone id is not allowed"
+            )
+        host = address.compressed
     else:
         hostname = hostname.rstrip(".")
         if not hostname:
@@ -100,12 +114,12 @@ def parse_public_url(url: str) -> ValidatedUrl:
             host = hostname.encode("idna").decode("ascii").lower()
         except UnicodeError as exc:
             raise UrlPolicyError(UrlPolicyReason.INVALID_HOST, url, str(exc)) from exc
+        _validate_dns_host(host, url)
     if port is None:
         port = 443 if scheme == "https" else 80
+    authority = f"[{host}]" if ":" in host else host
     if port != (443 if scheme == "https" else 80):
-        authority = f"[{host}]" if ":" in host else f"{host}:{port}"
-    else:
-        authority = f"[{host}]" if ":" in host else host
+        authority = f"{authority}:{port}"
     normalized = urlunsplit((scheme, authority, parts.path, parts.query, ""))
     return ValidatedUrl(
         url=normalized,
@@ -113,6 +127,26 @@ def parse_public_url(url: str) -> ValidatedUrl:
         host=host,
         port=port,
     )
+
+
+def _validate_dns_host(host: str, url: str) -> None:
+    if len(host) > _HOSTNAME_MAX_LENGTH:
+        raise UrlPolicyError(UrlPolicyReason.INVALID_HOST, url, "hostname too long")
+    for label in host.split("."):
+        if not label:
+            raise UrlPolicyError(UrlPolicyReason.INVALID_HOST, url, "empty label")
+        if len(label) > _LABEL_MAX_LENGTH:
+            raise UrlPolicyError(UrlPolicyReason.INVALID_HOST, url, "label too long")
+        if label.startswith("-") or label.endswith("-"):
+            raise UrlPolicyError(
+                UrlPolicyReason.INVALID_HOST, url, "label hyphen at edge"
+            )
+        if not all(
+            "a" <= char <= "z" or "0" <= char <= "9" or char == "-" for char in label
+        ):
+            raise UrlPolicyError(
+                UrlPolicyReason.INVALID_HOST, url, "non-LDH character"
+            )
 
 
 def normalized_origin(url: str) -> Origin:

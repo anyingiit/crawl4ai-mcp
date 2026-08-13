@@ -35,6 +35,68 @@ def test_same_origin_includes_scheme_and_effective_port():
     assert not same_origin("https://example.com/a", "https://example.com:444/a")
 
 
+def test_parse_public_url_preserves_ipv6_non_default_port():
+    parsed = parse_public_url("https://[2606:4700:4700::1111]:8443/a")
+    assert parsed.url == "https://[2606:4700:4700::1111]:8443/a"
+    assert parsed.origin == Origin("https", "2606:4700:4700::1111", 8443)
+
+
+@pytest.mark.parametrize("url,expected", [
+    ("https://[2606:4700:4700::1111]/a", "https://[2606:4700:4700::1111]/a"),
+    ("https://[2606:4700:4700::1111]:443/a", "https://[2606:4700:4700::1111]/a"),
+    ("http://[2606:4700:4700::1111]:80/a", "http://[2606:4700:4700::1111]/a"),
+])
+def test_parse_public_url_strips_default_ipv6_ports(url, expected):
+    assert parse_public_url(url).url == expected
+
+
+@pytest.mark.parametrize("url", [
+    "https://exa mple.com/a",
+    "https://a..b.com/a",
+    "https://.example.com/a",
+    "https://-bad.com/a",
+    "https://bad-.com/a",
+    "https://xn--.com/a",
+    "https://" + "a" * 64 + ".com/a",
+    "https://" + ".".join(["a" * 63] * 4) + "/a",
+])
+def test_parse_public_url_rejects_malformed_dns_hostnames(url):
+    with pytest.raises(UrlPolicyError) as exc:
+        parse_public_url(url)
+    assert exc.value.reason == UrlPolicyReason.INVALID_HOST
+
+
+@pytest.mark.parametrize("url", [
+    "https://exa\tmple.com/a",
+    "https://exa\nmple.com/a",
+    "https://exa\rmple.com/a",
+    "https://exa\u0001mple.com/a",
+    "https://exa\u007fmple.com/a",
+])
+def test_parse_public_url_rejects_control_characters(url):
+    with pytest.raises(UrlPolicyError) as exc:
+        parse_public_url(url)
+    assert exc.value.reason == UrlPolicyReason.INVALID_URL
+
+
+def test_parse_public_url_accepts_valid_punycode_hostname():
+    parsed = parse_public_url("https://BÜCHER.example/a")
+    assert parsed.host == "xn--bcher-kva.example"
+    assert parsed.url == "https://xn--bcher-kva.example/a"
+
+
+@pytest.mark.parametrize("url", [
+    "https://[fe80::1%25eth0]/a",
+    "https://[fe80::1%eth0]/a",
+    "https://[2606:4700:4700::1111%25eth0]/a",
+    "http://[2606:4700:4700::1111%25en0]/a",
+])
+def test_parse_public_url_rejects_scoped_ipv6_literals(url):
+    with pytest.raises(UrlPolicyError) as exc:
+        parse_public_url(url)
+    assert exc.value.reason == UrlPolicyReason.INVALID_HOST
+
+
 @pytest.mark.parametrize("literal", [
     "127.0.0.1", "10.0.0.1", "169.254.169.254", "::1", "fe80::1",
     "::ffff:127.0.0.1", "::127.0.0.1", "2002:7f00:1::",
@@ -67,3 +129,12 @@ async def test_url_policy_returns_all_validated_global_answers():
     assert tuple(map(str, target.addresses)) == (
         "93.184.216.34", "2606:2800:220:1:248:1893:25c8:1946",
     )
+
+
+@pytest.mark.asyncio
+async def test_url_policy_rejects_scoped_ipv6_before_resolution():
+    async def resolver(_host, _port):
+        raise AssertionError("resolver must not run for a scoped IPv6 literal")
+    with pytest.raises(UrlPolicyError) as exc:
+        await UrlPolicy(resolver).resolve("https://[2606:4700:4700::1111%25eth0]/")
+    assert exc.value.reason == UrlPolicyReason.INVALID_HOST

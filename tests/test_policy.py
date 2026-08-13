@@ -18,6 +18,37 @@ async def test_invalid_url_cannot_create_empty_domain_row(tmp_path):
     await store.close()
 
 
+@pytest.mark.parametrize("url", [
+    "https://exa mple.com/a",
+    "https://-bad.com/a",
+    "https://a..b.com/a",
+])
+@pytest.mark.asyncio
+async def test_policy_store_rejects_malformed_url_before_write(tmp_path, url):
+    store = await PolicyStore.open(tmp_path / "policy.db")
+    with pytest.raises(UrlPolicyError):
+        await store.record_success(url, Tier.UNDETECTED, now=1_000)
+    with pytest.raises(UrlPolicyError):
+        await store.record_failure(url, "all_failed", now=1_000)
+    assert await store.list_policies() == []
+    await store.close()
+
+
+@pytest.mark.parametrize("url", [
+    "https://exa mple.com/a",
+    "https://-bad.com/a",
+    "https://a..b.com/a",
+])
+@pytest.mark.asyncio
+async def test_policy_store_rejects_malformed_url_before_read(tmp_path, url):
+    store = await PolicyStore.open(tmp_path / "policy.db")
+    with pytest.raises(UrlPolicyError):
+        await store.get_start_tier(url, now=1_000)
+    with pytest.raises(UrlPolicyError):
+        await store.get_active_cooldown(url, now=1_000)
+    await store.close()
+
+
 @pytest.mark.asyncio
 async def test_success_is_reused_for_same_domain(tmp_path):
     store = await PolicyStore.open(tmp_path / "policy.db")
