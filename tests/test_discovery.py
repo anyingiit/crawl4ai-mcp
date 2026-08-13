@@ -601,3 +601,48 @@ async def test_crawl_reports_requested_alias_when_redirect_escapes_origin():
     )
     assert [page.url for page in crawl.pages] == ["https://example.com/"]
     assert engine.calls == ["https://example.com/"]
+
+
+@pytest.mark.asyncio
+async def test_map_urls_rejects_scheme_port_and_credential_candidates():
+    factory = seeder_factory_for([
+        entry("https://docs.example.com/ok"),
+        entry("http://docs.example.com/no-scheme"),
+        entry("https://docs.example.com:444/no-port"),
+        entry("https://user:pass@docs.example.com/no-creds"),
+        entry("file:///etc/passwd"),
+        entry("https://cdn.other.net/x"),
+        entry("not a url"),
+    ])
+    urls = await map_urls(
+        "https://docs.example.com/", limit=100,
+        policy=public_policy(), proxy=FakePinnedProxy(), seeder_factory=factory,
+    )
+    assert urls == ["https://docs.example.com/ok"]
+
+
+@pytest.mark.asyncio
+async def test_map_urls_normalizes_candidate_hosts_and_fragments():
+    factory = seeder_factory_for([
+        entry("HTTPS://ExAmPlE.COM.:443/a#frag"),
+        entry("https://docs.example.com/b#frag"),
+    ])
+    urls = await map_urls(
+        "https://docs.example.com/", limit=100,
+        policy=public_policy(), proxy=FakePinnedProxy(), seeder_factory=factory,
+    )
+    assert urls == ["https://docs.example.com/b"]
+
+
+@pytest.mark.asyncio
+async def test_map_urls_dedupes_normalized_candidates():
+    factory = seeder_factory_for([
+        entry("https://docs.example.com/a#one"),
+        entry("https://docs.example.com/a#two"),
+        entry("https://docs.example.com/a"),
+    ])
+    urls = await map_urls(
+        "https://docs.example.com/", limit=100,
+        policy=public_policy(), proxy=FakePinnedProxy(), seeder_factory=factory,
+    )
+    assert urls == ["https://docs.example.com/a"]

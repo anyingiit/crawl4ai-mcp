@@ -158,6 +158,65 @@ def normalized_origin(url: str) -> Origin:
     return parse_public_url(url).origin
 
 
+def normalize_hostname(value: str) -> str:
+    """Canonical public hostname from a URL or a bare hostname.
+
+    URLs must carry a scheme; bare hostnames are IDNA-normalized with
+    the trailing dot stripped and LDH labels validated. Credentials,
+    malformed labels, scoped IPv6 literals, and private or loopback
+    literal ambiguity are all rejected.
+    """
+    if not isinstance(value, str) or not value:
+        raise UrlPolicyError(UrlPolicyReason.MISSING_HOST, str(value), "")
+    if "://" in value:
+        return parse_public_url(value).host
+    if any(ord(char) < 0x20 or ord(char) == 0x7F for char in value):
+        raise UrlPolicyError(
+            UrlPolicyReason.INVALID_HOST, value, "control characters"
+        )
+    if value.startswith("[") and value.endswith("]"):
+        value = value[1:-1]
+    if ":" in value:
+        if "%" in value:
+            raise UrlPolicyError(
+                UrlPolicyReason.INVALID_HOST, value, "ipv6 zone id is not allowed"
+            )
+        try:
+            address = ipaddress.IPv6Address(value)
+        except ValueError as exc:
+            raise UrlPolicyError(
+                UrlPolicyReason.INVALID_HOST, value, str(exc)
+            ) from exc
+        if address.scope_id:
+            raise UrlPolicyError(
+                UrlPolicyReason.INVALID_HOST, value, "ipv6 zone id is not allowed"
+            )
+        if not is_allowed_address(address):
+            raise UrlPolicyError(
+                UrlPolicyReason.NON_GLOBAL_ADDRESS, value, str(address)
+            )
+        return address.compressed
+    hostname = value.rstrip(".")
+    if not hostname:
+        raise UrlPolicyError(UrlPolicyReason.MISSING_HOST, value, "")
+    try:
+        host = hostname.encode("idna").decode("ascii").lower()
+    except UnicodeError as exc:
+        raise UrlPolicyError(
+            UrlPolicyReason.INVALID_HOST, value, str(exc)
+        ) from exc
+    _validate_dns_host(host, value)
+    try:
+        literal = ipaddress.ip_address(host)
+    except ValueError:
+        return host
+    if not is_allowed_address(literal):
+        raise UrlPolicyError(
+            UrlPolicyReason.NON_GLOBAL_ADDRESS, value, str(literal)
+        )
+    return host
+
+
 def same_origin(left: str, right: str) -> bool:
     try:
         return normalized_origin(left) == normalized_origin(right)
@@ -668,11 +727,11 @@ class PinnedEgressProxy:
                 remote_reader, remote_writer, early = await self._open_upstream_tunnel(
                     host, port, upstream
                 )
-        except UrlPolicyError as exc:
-            await self._reject(writer, 403, str(exc))
+        except UrlPolicyError:
+            await self._reject(writer, 403, "blocked by policy")
             return
-        except Exception as exc:
-            await self._reject(writer, 502, f"tunnel failed: {exc}")
+        except Exception:
+            await self._reject(writer, 502, "tunnel failed")
             return
         try:
             writer.write(b"HTTP/1.1 200 Connection established\r\n\r\n")
@@ -702,8 +761,8 @@ class PinnedEgressProxy:
     ) -> None:
         try:
             resolved = await self._policy.resolve(target)
-        except UrlPolicyError as exc:
-            await self._reject(writer, 403, str(exc))
+        except UrlPolicyError:
+            await self._reject(writer, 403, "blocked by policy")
             return
         parts = urlsplit(resolved.url.url)
         origin_form = parts.path or "/"
@@ -733,13 +792,13 @@ class PinnedEgressProxy:
         except asyncio.CancelledError:
             await self._close_remote(remote_writer)
             raise
-        except UrlPolicyError as exc:
+        except UrlPolicyError:
             await self._close_remote(remote_writer)
-            await self._reject(writer, 403, str(exc))
+            await self._reject(writer, 403, "blocked by policy")
             return
-        except Exception as exc:
+        except Exception:
             await self._close_remote(remote_writer)
-            await self._reject(writer, 502, f"tunnel failed: {exc}")
+            await self._reject(writer, 502, "tunnel failed")
             return
         await self._relay(reader, writer, remote_reader, remote_writer)
 

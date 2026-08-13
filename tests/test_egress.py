@@ -4,6 +4,7 @@ import ipaddress
 import pytest
 
 from crawl4ai_mcp.egress import (
+    normalize_hostname,
     Origin,
     PinnedEgressProxy,
     ResolvedTarget,
@@ -871,6 +872,117 @@ async def test_cancelling_upstream_connect_handshake_closes_remote_writer():
         await asyncio.wait_for(remote.in_drain.wait(), 5)
         await _cancel_handler(proxy, remote)
         assert await asyncio.wait_for(reader.read(100), 5) == b""
+        writer.close()
+    finally:
+        await proxy.close()
+
+
+@pytest.mark.parametrize("value", [
+    "example.com", "ExAmPlE.COM.", "HTTPS://ExAmPlE.COM.:443/a?q=1#f",
+])
+def test_normalize_hostname_accepts_bare_hostnames_and_urls(value):
+    assert normalize_hostname(value) == "example.com"
+
+
+@pytest.mark.parametrize("value", [
+    "user@example.com", "-bad.com", "a..b.com", "exa mple.com",
+    "example.com:443", "example.com/path", "a" * 254,
+])
+def test_normalize_hostname_rejects_malformed_bare_hostnames(value):
+    with pytest.raises(UrlPolicyError):
+        normalize_hostname(value)
+
+
+@pytest.mark.parametrize("value", ["127.0.0.1", "10.0.0.1", "fe80::1", "::1"])
+def test_normalize_hostname_rejects_private_or_scoped_literals(value):
+    with pytest.raises(UrlPolicyError) as exc:
+        normalize_hostname(value)
+    assert exc.value.reason == UrlPolicyReason.NON_GLOBAL_ADDRESS
+
+
+def test_normalize_hostname_accepts_global_literal():
+    assert normalize_hostname("93.184.216.34") == "93.184.216.34"
+
+
+@pytest.mark.asyncio
+async def test_proxy_policy_rejection_uses_fixed_message_without_url():
+    proxy = PinnedEgressProxy(private_policy())
+    await proxy.start()
+    try:
+        reader, writer = await _connect_to(proxy.endpoint())
+        writer.write(
+            b"CONNECT 10.0.0.5:443 HTTP/1.1\r\nHost: 10.0.0.5:443\r\n\r\n"
+        )
+        await writer.drain()
+        head = await reader.readuntil(b"\r\n\r\n")
+        assert head.startswith(b"HTTP/1.1 403")
+        assert b"10.0.0.5" not in head
+        assert b"non_global" not in head
+        body = await reader.read()
+        assert b"10.0.0.5" not in body
+        assert b"non_global" not in body
+        writer.close()
+    finally:
+        await proxy.close()
+
+
+@pytest.mark.asyncio
+async def test_proxy_tunnel_failure_uses_fixed_message_without_exception_text():
+    async def connect(host, port, **_kwargs):
+        raise OSError("socket error: connect to 10.9.9.9 port 443 failed: timeout")
+
+    proxy = PinnedEgressProxy(public_policy(), connect=connect)
+    await proxy.start()
+    try:
+        reader, writer = await _connect_to(proxy.endpoint())
+        writer.write(b"CONNECT example.com:443 HTTP/1.1\r\nHost: example.com:443\r\n\r\n")
+        await writer.drain()
+        head = await reader.readuntil(b"\r\n\r\n")
+        assert head.startswith(b"HTTP/1.1 502")
+        assert b"10.9.9.9" not in head
+        assert b"timeout" not in head
+        writer.close()
+    finally:
+        await proxy.close()
+
+
+@pytest.mark.asyncio
+async def test_proxy_absolute_form_policy_rejection_uses_fixed_message():
+    proxy = PinnedEgressProxy(private_policy())
+    await proxy.start()
+    try:
+        reader, writer = await _connect_to(proxy.endpoint())
+        writer.write(
+            b"GET http://169.254.169.254/latest/meta-data/ HTTP/1.1\r\n"
+            b"Host: 169.254.169.254\r\n\r\n"
+        )
+        await writer.drain()
+        head = await reader.readuntil(b"\r\n\r\n")
+        assert head.startswith(b"HTTP/1.1 403")
+        assert b"169.254.169.254" not in head
+        assert b"meta-data" not in head
+        writer.close()
+    finally:
+        await proxy.close()
+
+
+@pytest.mark.asyncio
+async def test_proxy_absolute_form_tunnel_failure_uses_fixed_message():
+    async def connect(host, port, **_kwargs):
+        raise ConnectionRefusedError("refused at 203.0.113.7")
+
+    proxy = PinnedEgressProxy(public_policy(), connect=connect)
+    await proxy.start()
+    try:
+        reader, writer = await _connect_to(proxy.endpoint())
+        writer.write(
+            b"GET http://example.com/ HTTP/1.1\r\nHost: example.com\r\n\r\n"
+        )
+        await writer.drain()
+        head = await reader.readuntil(b"\r\n\r\n")
+        assert head.startswith(b"HTTP/1.1 502")
+        assert b"203.0.113.7" not in head
+        assert b"refused" not in head
         writer.close()
     finally:
         await proxy.close()

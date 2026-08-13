@@ -343,3 +343,93 @@ async def test_diagnose_reports_expected_sections(config):
         assert report["domain_policies"] == []
     finally:
         await service.close()
+
+
+@pytest.mark.asyncio
+async def test_diagnose_accepts_bare_hostname(config):
+    service = await make_service(config)
+    try:
+        await service.policy.record_success(
+            "https://example.com/a", Tier.HTTP, now=1_000
+        )
+        report = await service.diagnose(domain="example.com")
+        assert [row["domain"] for row in report["domain_policies"]] == ["example.com"]
+    finally:
+        await service.close()
+
+
+@pytest.mark.asyncio
+async def test_diagnose_still_accepts_full_url(config):
+    service = await make_service(config)
+    try:
+        await service.policy.record_success(
+            "https://example.com/a", Tier.HTTP, now=1_000
+        )
+        report = await service.diagnose(domain="https://example.com/b?q=1")
+        assert [row["domain"] for row in report["domain_policies"]] == ["example.com"]
+    finally:
+        await service.close()
+
+
+@pytest.mark.asyncio
+async def test_diagnose_rejects_private_literal_hostname(config):
+    service = await make_service(config)
+    try:
+        with pytest.raises(UrlPolicyError):
+            await service.diagnose(domain="127.0.0.1")
+    finally:
+        await service.close()
+
+
+from crawl4ai_mcp.service import parse_upstream_proxy
+
+
+def test_parse_upstream_proxy_accepts_http_and_https():
+    proxy = parse_upstream_proxy("http://proxy.example:8080")
+    assert proxy.server == "http://proxy.example:8080"
+    assert proxy.username is None
+    assert proxy.password is None
+    proxy = parse_upstream_proxy("https://proxy.example:8443")
+    assert proxy.server == "https://proxy.example:8443"
+    proxy = parse_upstream_proxy("proxy.example:8080")
+    assert proxy.server == "http://proxy.example:8080"
+
+
+def test_parse_upstream_proxy_rejects_unsupported_schemes():
+    for url in ("ftp://proxy.example:21", "socks5://proxy.example:1080"):
+        with pytest.raises(ValueError, match="scheme"):
+            parse_upstream_proxy(url)
+
+
+def test_parse_upstream_proxy_rejects_userinfo():
+    with pytest.raises(ValueError, match="userinfo"):
+        parse_upstream_proxy("http://user:pass@proxy.example:8080")
+
+
+def test_parse_upstream_proxy_rejects_path_query_and_fragment():
+    for url in (
+        "http://proxy.example:8080/path",
+        "http://proxy.example:8080/?q=1",
+        "http://proxy.example:8080/#frag",
+    ):
+        with pytest.raises(ValueError):
+            parse_upstream_proxy(url)
+
+
+def test_parse_upstream_proxy_rejects_invalid_ports_cleanly():
+    with pytest.raises(ValueError, match="port"):
+        parse_upstream_proxy("http://proxy.example:notaport")
+    with pytest.raises(ValueError, match="port"):
+        parse_upstream_proxy("http://proxy.example:99999")
+
+
+def test_parse_upstream_proxy_canonicalizes_host():
+    proxy = parse_upstream_proxy("HTTP://ExAmPlE.COM.:8080")
+    assert proxy.server == "http://example.com:8080"
+
+
+def test_parse_upstream_proxy_rejects_missing_host():
+    with pytest.raises(ValueError):
+        parse_upstream_proxy("http://:8080")
+    with pytest.raises(ValueError):
+        parse_upstream_proxy("http://user@:8080")

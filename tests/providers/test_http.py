@@ -282,3 +282,42 @@ async def test_http_provider_network_error_is_normalized(local_server):
     assert result.error is not None
     assert result.tier == Tier.HTTP
     await provider.close()
+
+
+def test_session_factory_is_synchronous_callable_protocol():
+    from typing import get_type_hints
+
+    from crawl4ai_mcp.providers.http import HttpProvider, SessionProtocol
+
+    hints = get_type_hints(HttpProvider.__init__)
+    factory_hint = hints["session_factory"]
+    factory_hint = str(factory_hint).replace("typing.", "")
+    assert "Callable" in factory_hint
+    assert "Awaitable" not in factory_hint.replace("get_type_hints", "")
+    assert SessionProtocol is not None
+
+    calls = []
+
+    def factory(**kwargs):
+        calls.append(kwargs)
+        return FakeSessionForProtocol()
+
+    provider = HttpProvider(public_policy(), session_factory=factory)
+    session = provider._open_session(["example.com:443:93.184.216.34"])
+    assert calls == [{
+        "impersonate": "chrome131",
+        "timeout": 10,
+        "trust_env": False,
+        "allow_redirects": False,
+        "curl_options": {CurlOpt.RESOLVE: ["example.com:443:93.184.216.34"]},
+    }]
+    assert isinstance(session, FakeSessionForProtocol)
+    assert asyncio.iscoroutine(session) is False
+
+
+class FakeSessionForProtocol:
+    async def get(self, url, headers=None):
+        raise AssertionError("not used in unit check")
+
+    async def close(self):
+        pass

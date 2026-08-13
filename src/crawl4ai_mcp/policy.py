@@ -7,7 +7,7 @@ import time
 from pydantic import BaseModel
 from aiosqlite import Connection, connect
 
-from crawl4ai_mcp.egress import parse_public_url
+from crawl4ai_mcp.egress import normalize_hostname, parse_public_url
 from crawl4ai_mcp.models import Tier
 
 DAY_SECONDS = 86_400
@@ -55,6 +55,11 @@ class DomainPolicy(BaseModel):
 
 def normalize_domain(url: str) -> str:
     return parse_public_url(url).host
+
+
+def policy_host(value: str) -> str:
+    """Canonical policy host from a URL or a bare validated hostname."""
+    return normalize_hostname(value)
 
 
 def _row_to_policy(row: sqlite3.Row) -> DomainPolicy:
@@ -152,7 +157,7 @@ class PolicyStore:
             await self._conn.execute("DELETE FROM domain_policy")
         else:
             await self._conn.execute(
-                "DELETE FROM domain_policy WHERE domain = ?", (normalize_domain(domain),)
+                "DELETE FROM domain_policy WHERE domain = ?", (policy_host(domain),)
             )
         await self._conn.commit()
 
@@ -165,7 +170,7 @@ class PolicyStore:
         else:
             async with self._conn.execute(
                 "SELECT * FROM domain_policy WHERE domain = ? ORDER BY domain",
-                (normalize_domain(domain),),
+                (policy_host(domain),),
             ) as cursor:
                 rows = await cursor.fetchall()
         return [_row_to_policy(row) for row in rows]

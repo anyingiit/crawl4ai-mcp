@@ -159,3 +159,24 @@ async def test_concurrent_successes_and_failures_serialize_without_mixed_rows(tm
         assert row.cooldown_until is None
         assert row.best_tier == Tier.UNDETECTED
     await store.close()
+
+
+@pytest.mark.asyncio
+async def test_list_policies_accepts_bare_hostname(tmp_path):
+    store = await PolicyStore.open(tmp_path / "policy.db")
+    await store.record_success("https://example.com/a", Tier.STEALTH, now=1_000)
+    rows = await store.list_policies("example.com")
+    assert [row.domain for row in rows] == ["example.com"]
+    rows = await store.list_policies("ExAmPlE.COM.")
+    assert [row.domain for row in rows] == ["example.com"]
+    await store.close()
+
+
+@pytest.mark.asyncio
+async def test_list_policies_rejects_private_literal_hostname(tmp_path):
+    store = await PolicyStore.open(tmp_path / "policy.db")
+    with pytest.raises(UrlPolicyError):
+        await store.list_policies("127.0.0.1")
+    with pytest.raises(UrlPolicyError):
+        await store.list_policies("user@example.com")
+    await store.close()

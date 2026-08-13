@@ -3,7 +3,7 @@ from __future__ import annotations
 import time
 from collections import deque
 from fnmatch import fnmatch
-from urllib.parse import urlsplit, urlunsplit, urljoin
+from urllib.parse import urljoin
 
 import httpx
 from bs4 import BeautifulSoup
@@ -31,15 +31,6 @@ from crawl4ai_mcp.models import (
 MAX_MAP_URLS = 100
 MAX_CRAWL_PAGES = 100
 MAX_CRAWL_DEPTH = 5
-
-
-def _hostname(url: str) -> str:
-    return (urlsplit(url).hostname or "").lower().rstrip(".")
-
-
-def _without_fragment(url: str) -> str:
-    parts = urlsplit(url)
-    return urlunsplit(parts._replace(fragment=""))
 
 
 class PinnedUrlSeeder(AsyncUrlSeeder):
@@ -113,9 +104,10 @@ async def map_urls(
 ) -> list[str]:
     if not 1 <= limit <= MAX_MAP_URLS:
         raise ValueError(f"limit must be between 1 and {MAX_MAP_URLS}")
-    domain = _hostname(url)
 
-    await policy.resolve(url)
+    resolved_root = await policy.resolve(url)
+    domain = resolved_root.url.host
+    root_origin = resolved_root.url.origin
 
     from crawl4ai.async_configs import SeedingConfig
 
@@ -153,13 +145,17 @@ async def map_urls(
         candidate = entry.get("url") if isinstance(entry, dict) else entry
         if not candidate:
             continue
-        candidate = _without_fragment(candidate)
-        if _hostname(candidate) != domain:
+        try:
+            validated = parse_public_url(candidate)
+        except UrlPolicyError:
             continue
-        if candidate in seen:
+        if validated.origin != root_origin:
             continue
-        seen.add(candidate)
-        urls.append(candidate)
+        normalized = validated.url
+        if normalized in seen:
+            continue
+        seen.add(normalized)
+        urls.append(normalized)
         if len(urls) >= MAX_MAP_URLS:
             break
     return urls

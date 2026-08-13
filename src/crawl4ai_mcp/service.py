@@ -3,10 +3,9 @@ from __future__ import annotations
 import asyncio
 import time
 from collections import deque
-from urllib.parse import unquote, urlsplit
+from urllib.parse import urlsplit
 
 import psutil
-from crawl4ai.async_configs import ProxyConfig
 
 from crawl4ai_mcp.cascade import CascadeEngine, CascadeInputError
 from crawl4ai_mcp.config import AppConfig
@@ -16,6 +15,8 @@ from crawl4ai_mcp.egress import (
     PinnedEgressProxy,
     UpstreamProxy,
     UrlPolicy,
+    UrlPolicyError,
+    parse_public_url,
 )
 from crawl4ai_mcp.models import (
     DiagnoseDomainPolicy,
@@ -46,28 +47,54 @@ def parse_tier(value: str | None) -> Tier | None:
         ) from None
 
 
-def parse_proxy_url(url: str) -> ProxyConfig:
-    parts = urlsplit(url)
-    scheme = parts.scheme or "http"
-    host = parts.hostname or ""
-    port = parts.port or (443 if scheme == "https" else 80)
-    return ProxyConfig(
-        server=f"{scheme}://{host}:{port}",
-        username=unquote(parts.username) if parts.username else None,
-        password=unquote(parts.password) if parts.password else None,
-    )
-
-
 def parse_upstream_proxy(url: str) -> UpstreamProxy:
-    parts = urlsplit(url)
-    scheme = parts.scheme or "http"
-    host = parts.hostname or ""
-    port = parts.port or (443 if scheme == "https" else 80)
-    return UpstreamProxy(
-        server=f"{scheme}://{host}:{port}",
-        username=unquote(parts.username) if parts.username else None,
-        password=unquote(parts.password) if parts.password else None,
-    )
+    """Validate an upstream proxy configuration URL.
+
+    Only http/https is accepted, without URL userinfo, path, query, or
+    fragment; credentials belong in explicit username/password fields.
+    The host is canonicalized through the shared URL policy, invalid
+    ports are rejected with sanitized messages, and missing hosts fail.
+    """
+    if not isinstance(url, str) or not url.strip():
+        raise ValueError("proxy url must not be empty")
+    value = url.strip()
+    if "://" not in value:
+        value = f"http://{value}"
+    try:
+        parts = urlsplit(value)
+    except ValueError as exc:
+        raise ValueError(f"invalid proxy url: {exc}") from exc
+    scheme = parts.scheme.lower()
+    if scheme not in ("http", "https"):
+        raise ValueError(
+            f"unsupported proxy scheme {scheme!r}; expected http or https"
+        )
+    if parts.username is not None or parts.password is not None:
+        raise ValueError(
+            "proxy url must not contain userinfo; "
+            "set username and password explicitly"
+        )
+    if parts.path not in ("", "/"):
+        raise ValueError("proxy url must not contain a path")
+    if parts.query:
+        raise ValueError("proxy url must not contain a query")
+    if parts.fragment:
+        raise ValueError("proxy url must not contain a fragment")
+    try:
+        port = parts.port
+    except ValueError as exc:
+        raise ValueError(f"invalid port in proxy url: {exc}") from exc
+    if port is not None and not 1 <= port <= 65535:
+        raise ValueError(f"invalid port {port} in proxy url")
+    if not parts.hostname:
+        raise ValueError("proxy url is missing a host")
+    if port is None:
+        port = 443 if scheme == "https" else 80
+    try:
+        validated = parse_public_url(f"{scheme}://{parts.hostname}:{port}/")
+    except UrlPolicyError as exc:
+        raise ValueError(str(exc)) from exc
+    return UpstreamProxy(server=f"{scheme}://{validated.host}:{port}")
 
 
 class CrawlService:

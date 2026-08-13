@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import time
-from typing import Awaitable, Callable
+from typing import Callable, Protocol
 from urllib.parse import urljoin
 
 from curl_cffi import CurlOpt
@@ -22,6 +22,16 @@ BROWSER_HEADERS = {
 REDIRECT_STATUSES = {301, 302, 303, 307, 308}
 
 
+class SessionProtocol(Protocol):
+    """Minimal synchronous session protocol consumed by HttpProvider."""
+
+    async def get(self, url: str, headers: dict | None = None) -> object:
+        raise NotImplementedError
+
+    async def close(self) -> None:
+        raise NotImplementedError
+
+
 class HttpProvider:
     tier = Tier.HTTP
     cost_kind = CostKind.FREE
@@ -32,7 +42,7 @@ class HttpProvider:
         concurrency: int = 8,
         timeout_seconds: int = 10,
         max_redirects: int = 10,
-        session_factory: Callable[..., Awaitable[object]] | None = None,
+        session_factory: Callable[..., SessionProtocol] | None = None,
     ):
         self._policy = policy or UrlPolicy()
         self._semaphore = asyncio.Semaphore(concurrency)
@@ -40,7 +50,7 @@ class HttpProvider:
         self._max_redirects = max_redirects
         self._session_factory = session_factory
 
-    async def _open_session(self, pinned: list[str]):
+    def _open_session(self, pinned: list[str]) -> SessionProtocol:
         factory = self._session_factory
         if factory is None:
             from curl_cffi.requests import AsyncSession
@@ -87,7 +97,7 @@ class HttpProvider:
                 ]
                 session = None
                 try:
-                    session = await self._open_session(pinned)
+                    session = self._open_session(pinned)
                     response = await session.get(
                         target.url.url, headers=BROWSER_HEADERS
                     )
