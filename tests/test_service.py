@@ -28,7 +28,7 @@ class StubProvider:
     async def fetch(self, url):
         return FetchResult(
             url=url, tier=self.tier, cost_kind=CostKind.FREE,
-            status_code=200, html="<main>" + "x" * 300 + "</main>",
+            target_status_code=200, html="<main>" + "x" * 300 + "</main>",
             markdown="# Ok", elapsed_ms=1,
         )
 

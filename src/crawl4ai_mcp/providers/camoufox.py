@@ -150,7 +150,7 @@ class CamoufoxProvider:
                     url=url,
                     tier=self.tier,
                     cost_kind=self.cost_kind,
-                    status_code=response.status if response is not None else None,
+                    target_status_code=response.status if response is not None else None,
                     html=html,
                     redirected_url=final_url if final_url != url else None,
                     elapsed_ms=int((time.monotonic() - started) * 1000),

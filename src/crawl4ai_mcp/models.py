@@ -1,7 +1,7 @@
 from dataclasses import dataclass
 from enum import IntEnum, StrEnum
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field
 
 
 class Tier(IntEnum):
@@ -19,6 +19,15 @@ class CostKind(StrEnum):
     PROXY_BANDWIDTH = "proxy_bandwidth"
     RAYOBYTE_CREDIT = "rayobyte_credit"
     FIRECRAWL_CREDIT = "firecrawl_credit"
+
+
+class ProviderErrorKind(StrEnum):
+    AUTH = "auth"
+    QUOTA = "quota"
+    RATE_LIMIT = "rate_limit"
+    TRANSPORT = "transport"
+    SERVICE = "service"
+    MALFORMED_RESPONSE = "malformed_response"
 
 
 class Decision(StrEnum):
@@ -40,6 +49,8 @@ class FetchResult(BaseModel):
     cost_kind: CostKind
     target_status_code: int | None = None
     provider_status_code: int | None = None
+    provider_error_kind: ProviderErrorKind | None = None
+    provider_error: str | None = None
     network_error: str | None = None
     policy_error: str | None = None
     html: str = ""
@@ -49,25 +60,15 @@ class FetchResult(BaseModel):
     elapsed_ms: int
     error: str | None = None
 
-    @model_validator(mode="before")
-    @classmethod
-    def _map_deprecated_status_code(cls, data: object) -> object:
-        if isinstance(data, dict) and "status_code" in data:
-            if "target_status_code" not in data:
-                data = {**data, "target_status_code": data["status_code"]}
-            data = {key: value for key, value in data.items() if key != "status_code"}
-        return data
-
-    @property
-    def status_code(self) -> int | None:
-        return self.target_status_code
-
 
 class AttemptResponse(BaseModel):
     tier: str
     decision: Decision
     cost_kind: CostKind
-    status_code: int | None = None
+    target_status_code: int | None = None
+    provider_status_code: int | None = None
+    provider_error_kind: ProviderErrorKind | None = None
+    provider_error: str | None = None
     elapsed_ms: int
     error: str | None = None
 
@@ -156,7 +157,7 @@ class ScrapeResult(BaseModel):
             cost_kind=fetched.cost_kind,
             elapsed_ms=sum(attempt.elapsed_ms for attempt in attempts),
             attempts=attempts,
-            error=fetched.error or f"HTTP {fetched.status_code}",
+            error=fetched.error or f"HTTP {fetched.target_status_code}",
         )
 
     @classmethod

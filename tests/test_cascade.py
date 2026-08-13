@@ -1,6 +1,13 @@
 import pytest
 from crawl4ai_mcp.cascade import CascadeEngine, CascadeInputError
-from crawl4ai_mcp.models import CostKind, Decision, FetchResult, ProviderAvailability, Tier
+from crawl4ai_mcp.models import (
+    CostKind,
+    Decision,
+    FetchResult,
+    ProviderAvailability,
+    ProviderErrorKind,
+    Tier,
+)
 from crawl4ai_mcp.policy import PolicyStore
 
 
@@ -17,7 +24,7 @@ class FakeClock:
 
 def success(url, tier):
     return FetchResult(
-        url=url, tier=tier, cost_kind=CostKind.FREE, status_code=200,
+        url=url, tier=tier, cost_kind=CostKind.FREE, target_status_code=200,
         html="<main>" + "x" * 300 + "</main>",
         markdown="# Fine", elapsed_ms=5,
     )
@@ -25,7 +32,7 @@ def success(url, tier):
 
 def cloudflare(url, tier):
     return FetchResult(
-        url=url, tier=tier, cost_kind=CostKind.FREE, status_code=200,
+        url=url, tier=tier, cost_kind=CostKind.FREE, target_status_code=200,
         html="<title>Just a moment...</title><script>window.__cf_chl_opt={}</script>",
         elapsed_ms=5,
     )
@@ -33,47 +40,62 @@ def cloudflare(url, tier):
 
 def short_js(url, tier):
     return FetchResult(
-        url=url, tier=tier, cost_kind=CostKind.FREE, status_code=200,
+        url=url, tier=tier, cost_kind=CostKind.FREE, target_status_code=200,
         html="<div id='app'></div><script src='app.js'></script>", elapsed_ms=5,
     )
 
 
 def not_found(url, tier):
     return FetchResult(
-        url=url, tier=tier, cost_kind=CostKind.FREE, status_code=404,
+        url=url, tier=tier, cost_kind=CostKind.FREE, target_status_code=404,
         html="missing", elapsed_ms=5,
     )
 
 
 def network_error(url, tier):
     return FetchResult(
-        url=url, tier=tier, cost_kind=CostKind.FREE, status_code=None,
+        url=url, tier=tier, cost_kind=CostKind.FREE, target_status_code=None,
         network_error="connection_refused", error="Connection refused", elapsed_ms=5,
     )
 
 
 def generic_error(url, tier):
     return FetchResult(
-        url=url, tier=tier, cost_kind=CostKind.FREE, status_code=None,
+        url=url, tier=tier, cost_kind=CostKind.FREE, target_status_code=None,
         error="Invalid token", elapsed_ms=5,
+    )
+
+
+def provider_auth_failure(url, tier):
+    return FetchResult(
+        url=url, tier=tier, cost_kind=CostKind.RAYOBYTE_CREDIT,
+        target_status_code=None, provider_status_code=401,
+        provider_error_kind=ProviderErrorKind.AUTH,
+        provider_error="Invalid token", error="Invalid token", elapsed_ms=5,
     )
 
 
 def rate_limited(url, tier):
     return FetchResult(
-        url=url, tier=tier, cost_kind=CostKind.FREE, status_code=429,
+        url=url, tier=tier, cost_kind=CostKind.FREE, target_status_code=429,
         html="slow down", headers={"retry-after": "60"}, elapsed_ms=5,
     )
 
 
 def policy_rejected(url, tier):
     return FetchResult(
-        url=url, tier=tier, cost_kind=CostKind.FREE, status_code=None,
+        url=url, tier=tier, cost_kind=CostKind.FREE, target_status_code=None,
         policy_error="non_global_address", error="blocked by policy", elapsed_ms=5,
     )
 
 
 def route(url, tier):
+    if "hard.example" in url:
+        if tier == Tier.RAYOBYTE:
+            if "/missing" in url:
+                return not_found(url, tier)
+            return provider_auth_failure(url, tier)
+        return success(url, tier)
     if "flaky.example" in url:
         return network_error(url, tier)
     if "protected.example" in url:
@@ -122,9 +144,11 @@ async def policy(tmp_path):
 @pytest.fixture
 async def engine(tmp_path, policy):
     providers = {tier: ScriptedProvider(tier, route) for tier in Tier}
-    return CascadeEngine(
+    engine = CascadeEngine(
         providers, policy, threshold=200, clock=FakeClock(1_000)
     )
+    await policy.record_success("https://hard.example/", Tier.RAYOBYTE, now=1_000)
+    return engine
 
 
 @pytest.fixture
@@ -243,6 +267,48 @@ async def test_untyped_provider_error_falls_back_to_next_available_tier(tmp_path
 
 
 @pytest.mark.asyncio
+async def test_provider_auth_failure_falls_back_without_terminal_or_network_retry(engine):
+    outcome = await engine.scrape("https://hard.example/")
+    assert engine.calls == [Tier.RAYOBYTE, Tier.FIRECRAWL]
+    assert outcome.response.status == "success"
+
+
+@pytest.mark.asyncio
+async def test_target_404_from_hosted_provider_is_terminal(engine):
+    outcome = await engine.scrape("https://hard.example/missing")
+    assert engine.calls == [Tier.RAYOBYTE]
+    assert outcome.response.status == "terminal"
+
+
+@pytest.mark.asyncio
+async def test_provider_auth_failure_attempt_carries_provider_details(engine):
+    outcome = await engine.scrape("https://hard.example/")
+    attempt = outcome.response.attempts[0]
+    assert attempt.decision == Decision.PROVIDER_FAILURE
+    assert attempt.target_status_code is None
+    assert attempt.provider_status_code == 401
+    assert attempt.provider_error_kind == ProviderErrorKind.AUTH
+    assert attempt.provider_error == "Invalid token"
+
+
+@pytest.mark.asyncio
+async def test_provider_auth_failure_on_last_paid_tier_stops_without_duplicate_credit_waste(tmp_path):
+    engine, policy = await make_engine(tmp_path, {
+        Tier.RAYOBYTE: provider_auth_failure, Tier.FIRECRAWL: provider_auth_failure,
+    })
+    await policy.record_success("https://hard.example/a", Tier.RAYOBYTE, now=1000)
+    try:
+        outcome = await engine.scrape("https://hard.example/b")
+        assert engine.calls == [Tier.RAYOBYTE, Tier.FIRECRAWL]
+        assert outcome.response.status == "failed"
+        assert [
+            attempt.decision for attempt in outcome.response.attempts
+        ] == [Decision.PROVIDER_FAILURE, Decision.PROVIDER_FAILURE]
+    finally:
+        await policy.close()
+
+
+@pytest.mark.asyncio
 async def test_remembered_tier_above_maximum_starts_at_maximum(engine, policy):
     await policy.record_success("https://hard.example/a", Tier.FIRECRAWL, now=1000)
     outcome = await engine.scrape("https://hard.example/b", maximum=Tier.UNDETECTED)
@@ -255,7 +321,7 @@ async def test_force_above_maximum_is_rejected_without_policy_mutation(engine, p
     with pytest.raises(CascadeInputError):
         await engine.scrape("https://example.com/", maximum=Tier.HTTP, force=Tier.FIRECRAWL)
     assert engine.calls == []
-    assert await policy.list_policies() == []
+    assert await policy.list_policies("https://example.com/") == []
 
 
 @pytest.mark.asyncio
@@ -278,7 +344,7 @@ async def test_short_static_page_is_accepted_without_escalation(tmp_path):
 
     def short_static(url, tier):
         return FetchResult(
-            url=url, tier=tier, cost_kind=CostKind.FREE, status_code=200,
+            url=url, tier=tier, cost_kind=CostKind.FREE, target_status_code=200,
             html="<main>Short notice</main>", markdown="Short notice", elapsed_ms=5,
         )
 
@@ -340,7 +406,9 @@ async def test_attempts_carry_full_metadata(engine_with_404):
     assert attempt.tier == "http"
     assert attempt.decision == Decision.TERMINAL
     assert attempt.cost_kind == CostKind.FREE
-    assert attempt.status_code == 404
+    assert attempt.target_status_code == 404
+    assert attempt.provider_status_code is None
+    assert attempt.provider_error_kind is None
     assert attempt.elapsed_ms == 5
     assert attempt.error is None
     assert outcome.response.error == "HTTP 404"

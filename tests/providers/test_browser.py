@@ -540,7 +540,7 @@ async def test_fetch_result_preserves_browser_tier(fake_clock):
     result = await provider.fetch("https://example.com")
     assert result.tier == Tier.STEALTH
     assert result.cost_kind == CostKind.FREE
-    assert result.status_code == 200
+    assert result.target_status_code == 200
     assert "Hello" in result.html
     await provider.close()
 

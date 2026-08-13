@@ -1,6 +1,12 @@
 import pytest
 from crawl4ai_mcp.detect import classify, next_tiers
-from crawl4ai_mcp.models import CostKind, Decision, FetchResult, Tier
+from crawl4ai_mcp.models import (
+    CostKind,
+    Decision,
+    FetchResult,
+    ProviderErrorKind,
+    Tier,
+)
 
 
 def fetched(status: int, html: str, headers=None):
@@ -67,6 +73,31 @@ def test_provider_failure_is_distinct_from_target_status():
         error="Invalid token", elapsed_ms=1,
     )
     assert classify(result) == Decision.PROVIDER_FAILURE
+
+
+@pytest.mark.parametrize("kind", list(ProviderErrorKind))
+def test_every_provider_error_kind_is_provider_failure(kind):
+    result = FetchResult(
+        url="https://example.com", tier=Tier.RAYOBYTE,
+        cost_kind=CostKind.RAYOBYTE_CREDIT,
+        target_status_code=None, provider_status_code=429,
+        provider_error_kind=kind, provider_error="boom", elapsed_ms=1,
+    )
+    assert classify(result) == Decision.PROVIDER_FAILURE
+
+
+def test_provider_rate_limit_is_not_target_rate_limited():
+    result = FetchResult(
+        url="https://example.com", tier=Tier.RAYOBYTE,
+        cost_kind=CostKind.RAYOBYTE_CREDIT,
+        target_status_code=None, provider_status_code=429,
+        provider_error_kind=ProviderErrorKind.RATE_LIMIT,
+        provider_error="rate limited", error="rate limited", elapsed_ms=1,
+    )
+    assert classify(result) == Decision.PROVIDER_FAILURE
+    assert next_tiers(Tier.RAYOBYTE, Decision.PROVIDER_FAILURE, Tier.FIRECRAWL) == [
+        Tier.FIRECRAWL,
+    ]
 
 
 def test_cloudflare_skips_datacenter_proxy():

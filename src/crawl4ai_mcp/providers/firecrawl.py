@@ -4,8 +4,14 @@ import time
 
 import httpx
 
-from crawl4ai_mcp.models import CostKind, FetchResult, ProviderAvailability, Tier
-from crawl4ai_mcp.providers.base import failed_result
+from crawl4ai_mcp.models import (
+    CostKind,
+    FetchResult,
+    ProviderAvailability,
+    ProviderErrorKind,
+    Tier,
+)
+from crawl4ai_mcp.providers.base import classify_provider_error, failed_result
 
 API_URL = "https://api.firecrawl.dev/v2/scrape"
 
@@ -36,40 +42,69 @@ class FirecrawlProvider:
                 headers={"Authorization": f"Bearer {self.api_key}"},
                 json={
                     "url": url,
-                    "formats": ["markdown"],
+                    "formats": ["markdown", "html"],
                     "onlyMainContent": True,
                     "proxy": "auto",
                     "timeout": 60000,
                 },
             )
-            if response.status_code in {402, 429} or response.status_code >= 500:
-                detail = ""
-                try:
-                    detail = (response.json().get("error") or "").strip()
-                except Exception:
-                    pass
-                message = detail or f"firecrawl http {response.status_code}"
-                return failed_result(
-                    url, self.tier, self.cost_kind, message,
-                    started,
-                    status_code=response.status_code,
-                )
-            data = response.json()
-            payload = data.get("data") or {}
-            metadata = payload.get("metadata") or {}
-            return FetchResult(
-                url=url,
-                tier=self.tier,
-                cost_kind=self.cost_kind,
-                status_code=metadata.get("statusCode"),
-                markdown=payload.get("markdown"),
-                elapsed_ms=int((time.monotonic() - started) * 1000),
-                error=data.get("error") if data.get("success") is False else None,
+        except httpx.RequestError as exc:
+            return failed_result(
+                url, self.tier, self.cost_kind, str(exc), started,
+                provider_error_kind=ProviderErrorKind.TRANSPORT,
+                provider_error=str(exc),
             )
+        provider_status = response.status_code
+        if provider_status != 200:
+            detail = ""
+            try:
+                detail = (response.json().get("error") or "").strip()
+            except Exception:
+                pass
+            message = detail or f"firecrawl http {provider_status}"
+            return failed_result(
+                url, self.tier, self.cost_kind, message, started,
+                provider_status_code=provider_status,
+                provider_error_kind=classify_provider_error(provider_status, detail),
+                provider_error=message,
+            )
+        try:
+            data = response.json()
         except Exception as exc:
             return failed_result(
-                url, self.tier, self.cost_kind, str(exc), started
+                url, self.tier, self.cost_kind, str(exc), started,
+                provider_status_code=provider_status,
+                provider_error_kind=ProviderErrorKind.MALFORMED_RESPONSE,
+                provider_error="invalid firecrawl json",
             )
+        if not isinstance(data, dict):
+            return failed_result(
+                url, self.tier, self.cost_kind, "malformed firecrawl response", started,
+                provider_status_code=provider_status,
+                provider_error_kind=ProviderErrorKind.MALFORMED_RESPONSE,
+                provider_error="malformed firecrawl response",
+            )
+        payload = data.get("data")
+        metadata = payload.get("metadata") if isinstance(payload, dict) else None
+        target_status = metadata.get("statusCode") if isinstance(metadata, dict) else None
+        if not isinstance(target_status, int):
+            return failed_result(
+                url, self.tier, self.cost_kind, "malformed firecrawl response", started,
+                provider_status_code=provider_status,
+                provider_error_kind=ProviderErrorKind.MALFORMED_RESPONSE,
+                provider_error="malformed firecrawl response",
+            )
+        return FetchResult(
+            url=url,
+            tier=self.tier,
+            cost_kind=self.cost_kind,
+            target_status_code=target_status,
+            provider_status_code=provider_status,
+            html=payload.get("html") or "",
+            markdown=payload.get("markdown"),
+            elapsed_ms=int((time.monotonic() - started) * 1000),
+            error=data.get("error") if data.get("success") is False else None,
+        )
 
     async def close(self) -> None:
         if self._client is not None:

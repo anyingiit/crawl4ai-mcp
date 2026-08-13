@@ -383,7 +383,7 @@ async def test_camoufox_disabled_reports_unavailable():
     assert availability.ready is False
     assert availability.reason == "disabled"
     result = await provider.fetch("https://example.com")
-    assert result.status_code is None
+    assert result.target_status_code is None
     assert result.error is not None
     assert launcher.calls == 0
     await provider.close()
@@ -394,7 +394,7 @@ async def test_camoufox_launch_failure_is_normalized():
     launcher = FakeLauncher(error=RuntimeError("browser artifact missing"))
     provider = make_provider(launcher=launcher)
     result = await provider.fetch("https://example.com")
-    assert result.status_code is None
+    assert result.target_status_code is None
     assert result.error is not None
     assert result.network_error is None
     availability = provider.availability()
@@ -422,7 +422,7 @@ async def test_camoufox_records_redirected_url_after_page_redirect():
         result = await provider.fetch("https://example.com/start")
         assert result.url == "https://example.com/start"
         assert result.redirected_url == "https://cdn.example.com/landed"
-        assert result.status_code == 200
+        assert result.target_status_code == 200
     finally:
         await provider.close()
 
@@ -434,7 +434,7 @@ async def test_camoufox_fetch_preserves_tier_and_cost():
     result = await provider.fetch("https://example.com")
     assert result.tier == Tier.CAMOUFOX
     assert result.cost_kind == CostKind.FREE
-    assert result.status_code == 200
+    assert result.target_status_code == 200
     assert "Camoufox content" in result.html
     assert launcher.sessions[0].browser.contexts[0].closed is True
     await provider.close()

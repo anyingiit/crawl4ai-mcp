@@ -3,6 +3,7 @@ from crawl4ai_mcp.models import (
     CostKind,
     Decision,
     FetchResult,
+    ProviderErrorKind,
     ScrapeOutcome,
     ScrapeResponse,
     Tier,
@@ -35,27 +36,30 @@ def test_fetch_result_separates_target_provider_and_policy_errors():
         cost_kind=CostKind.FREE,
         target_status_code=None,
         provider_status_code=401,
+        provider_error_kind=ProviderErrorKind.AUTH,
+        provider_error="Invalid token",
         network_error=None,
         policy_error="non_global_address",
         elapsed_ms=1,
     )
     assert result.target_status_code is None
     assert result.provider_status_code == 401
+    assert result.provider_error_kind == ProviderErrorKind.AUTH
+    assert result.provider_error == "Invalid token"
     assert result.network_error is None
     assert result.policy_error == "non_global_address"
-    assert result.status_code is None
+    assert "status_code" not in result.model_dump()
 
 
-def test_deprecated_status_code_keyword_maps_to_target_status():
+def test_fetch_result_has_no_ambiguous_status_code_alias():
     result = FetchResult(
         url="https://example.com",
         tier=Tier.HTTP,
         cost_kind=CostKind.FREE,
-        status_code=200,
+        target_status_code=200,
         elapsed_ms=1,
     )
-    assert result.target_status_code == 200
-    assert result.status_code == 200
+    assert not hasattr(result, "status_code")
     assert "status_code" not in result.model_dump()
 
 
@@ -72,7 +76,7 @@ def test_scrape_response_serializes_lowercase_tier_names():
                 tier="undetected",
                 decision=Decision.SUCCESS,
                 cost_kind=CostKind.FREE,
-                status_code=200,
+                target_status_code=200,
                 elapsed_ms=3,
             )
         ],
@@ -80,6 +84,29 @@ def test_scrape_response_serializes_lowercase_tier_names():
     payload = response.model_dump(mode="json")
     assert payload["tier_used"] == "http"
     assert payload["attempts"][0]["tier"] == "undetected"
+    assert payload["attempts"][0]["target_status_code"] == 200
+
+
+def test_attempt_response_carries_provider_failure_separately():
+    attempt = AttemptResponse(
+        tier="rayobyte",
+        decision=Decision.PROVIDER_FAILURE,
+        cost_kind=CostKind.RAYOBYTE_CREDIT,
+        target_status_code=None,
+        provider_status_code=401,
+        provider_error_kind=ProviderErrorKind.AUTH,
+        provider_error="Invalid token",
+        elapsed_ms=3,
+        error="Invalid token",
+    )
+    assert attempt.target_status_code is None
+    assert attempt.provider_status_code == 401
+    assert attempt.provider_error_kind == ProviderErrorKind.AUTH
+    assert attempt.provider_error == "Invalid token"
+    payload = attempt.model_dump(mode="json")
+    assert payload["target_status_code"] is None
+    assert payload["provider_status_code"] == 401
+    assert payload["provider_error_kind"] == "auth"
 
 
 def successful_outcome(

@@ -7,8 +7,21 @@ from crawl4ai_mcp.models import (
     CostKind,
     FetchResult,
     ProviderAvailability,
+    ProviderErrorKind,
     Tier,
 )
+
+
+def classify_provider_error(status_code: int, detail: str = "") -> ProviderErrorKind:
+    if status_code in {401, 403}:
+        return ProviderErrorKind.AUTH
+    if status_code == 429:
+        return ProviderErrorKind.RATE_LIMIT
+    if status_code >= 500:
+        return ProviderErrorKind.SERVICE
+    if status_code == 402 or "credit" in detail.lower():
+        return ProviderErrorKind.QUOTA
+    return ProviderErrorKind.MALFORMED_RESPONSE
 
 
 def failed_result(
@@ -17,7 +30,10 @@ def failed_result(
     cost_kind: CostKind,
     error: str,
     started_at: float,
-    status_code: int | None = None,
+    target_status_code: int | None = None,
+    provider_status_code: int | None = None,
+    provider_error_kind: ProviderErrorKind | None = None,
+    provider_error: str | None = None,
     network_error: str | None = None,
     policy_error: str | None = None,
 ) -> FetchResult:
@@ -25,7 +41,10 @@ def failed_result(
         url=url,
         tier=tier,
         cost_kind=cost_kind,
-        target_status_code=status_code,
+        target_status_code=target_status_code,
+        provider_status_code=provider_status_code,
+        provider_error_kind=provider_error_kind,
+        provider_error=provider_error,
         network_error=network_error,
         policy_error=policy_error,
         error=error,

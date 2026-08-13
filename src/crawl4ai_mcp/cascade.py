@@ -32,7 +32,10 @@ def _attempt(fetched: FetchResult, decision: Decision) -> AttemptResponse:
         tier=fetched.tier.name.lower(),
         decision=decision,
         cost_kind=fetched.cost_kind,
-        status_code=fetched.target_status_code,
+        target_status_code=fetched.target_status_code,
+        provider_status_code=fetched.provider_status_code,
+        provider_error_kind=fetched.provider_error_kind,
+        provider_error=fetched.provider_error,
         elapsed_ms=fetched.elapsed_ms,
         error=fetched.error,
     )

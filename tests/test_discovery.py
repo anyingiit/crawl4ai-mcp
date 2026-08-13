@@ -298,7 +298,7 @@ def make_site_engine(site, calls, rendered=None):
     def http_handler(url, tier):
         status, html = site[urlsplit(url).path or "/"]
         return FetchResult(
-            url=url, tier=tier, cost_kind=CostKind.FREE, status_code=status,
+            url=url, tier=tier, cost_kind=CostKind.FREE, target_status_code=status,
             html=html, markdown="ok", elapsed_ms=1,
         )
 
@@ -307,7 +307,7 @@ def make_site_engine(site, calls, rendered=None):
         status, html = site[path]
         rendered_html = rendered.get(path, html)
         return FetchResult(
-            url=url, tier=tier, cost_kind=CostKind.FREE, status_code=status,
+            url=url, tier=tier, cost_kind=CostKind.FREE, target_status_code=status,
             html=rendered_html, markdown="ok", elapsed_ms=1,
         )
 
@@ -396,7 +396,7 @@ async def test_crawl_stops_discovery_after_cross_origin_redirect_through_cascade
 
     def redirect_handler(url, tier):
         return FetchResult(
-            url=url, tier=tier, cost_kind=CostKind.FREE, status_code=200,
+            url=url, tier=tier, cost_kind=CostKind.FREE, target_status_code=200,
             html='<main><a href="/child">child</a></main>',
             markdown="ok", elapsed_ms=1,
             redirected_url="https://evil.example/landed",
