@@ -299,6 +299,35 @@ async def test_service_scrape_html_preserves_non_success_status(config):
         await service.close()
 
 
+class SpyPolicy(UrlPolicy):
+    def __init__(self):
+        super().__init__(
+            lambda _host, _port: [ipaddress.ip_address("93.184.216.34")]
+        )
+        self.resolve_calls = []
+
+    async def resolve(self, url):
+        self.resolve_calls.append(url)
+
+
+@pytest.mark.asyncio
+async def test_service_scrape_rejects_unknown_format_before_policy_or_engine(config):
+    class BoomEngine:
+        async def scrape(self, url, maximum=Tier.FIRECRAWL, force=None):
+            raise AssertionError("engine must not run for rejected format")
+
+    policy = SpyPolicy()
+    service = CrawlService(
+        config,
+        providers={Tier.HTTP: StubProvider(Tier.HTTP)},
+        engine=BoomEngine(),
+    )
+    service._url_policy = policy
+    with pytest.raises(ValueError, match="unknown format"):
+        await service.scrape("https://example.com/", format="text")
+    assert policy.resolve_calls == []
+
+
 @pytest.mark.asyncio
 async def test_diagnose_reports_expected_sections(config):
     providers = {Tier.HTTP: StubProvider(Tier.HTTP)}

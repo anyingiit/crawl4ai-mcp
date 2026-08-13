@@ -147,7 +147,7 @@ class RecentFailure(BaseModel):
     url: str
     time: int
     error: str | None = None
-    attempts: list[str] = Field(default_factory=list)
+    attempts: list[TierName] = Field(default_factory=list)
 
 
 class DiagnoseDomainPolicy(BaseModel):

@@ -105,6 +105,9 @@ async def test_tier_strings_and_bounds_constrained_in_schema(client):
     assert crawl_props["max_pages"]["maximum"] == 100
     assert crawl_props["max_depth"]["minimum"] == 1
     assert crawl_props["max_depth"]["maximum"] == 5
+    diagnose = tools["diagnose"].outputSchema["properties"]
+    attempts_items = diagnose["recent_failures"]["items"]["properties"]["attempts"]["items"]
+    assert attempts_items["enum"] == expected_tiers
 
 
 @pytest.mark.asyncio

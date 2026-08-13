@@ -205,6 +205,10 @@ class CrawlService:
         max_tier: TierName = "firecrawl",
         force_tier: TierName | None = None,
     ) -> dict:
+        if format not in ("markdown", "html"):
+            raise ValueError(
+                f"unknown format {format!r}; expected 'markdown' or 'html'"
+            )
         maximum = parse_tier(max_tier) if max_tier else Tier.FIRECRAWL
         force = parse_tier(force_tier)
         if force is not None and force > maximum:

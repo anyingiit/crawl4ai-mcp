@@ -229,6 +229,17 @@ def test_diagnose_response_serializes_domain_tier_as_lowercase_name():
     assert payload["recent_failures"][0]["attempts"] == ["http", "stealth"]
 
 
+def test_recent_failure_attempts_are_validated_tier_names():
+    failure = RecentFailure(
+        url="https://example.com", time=1, attempts=["http", "rayobyte"]
+    )
+    assert failure.attempts == ["http", "rayobyte"]
+    with pytest.raises(ValidationError):
+        RecentFailure(url="https://example.com", time=1, attempts=["bogus"])
+    with pytest.raises(ValidationError):
+        RecentFailure(url="https://example.com", time=1, attempts=[0])
+
+
 def test_dead_integer_tier_models_are_removed():
     import crawl4ai_mcp.models as models
 
