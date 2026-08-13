@@ -136,9 +136,12 @@ class FakeResult:
         html: str = "<main>Hello</main>",
         error_message: str | None = None,
         success: bool = True,
+        status_code: int | None = None,
     ):
         self.html = html
-        self.status_code = 200 if success else None
+        self.status_code = (
+            status_code if status_code is not None else (200 if success else None)
+        )
         self.response_headers = {"content-type": "text/html"}
         self.redirected_url = None
         self.error_message = error_message
@@ -151,8 +154,9 @@ class FakeContainer:
         html: str = "<main>Hello</main>",
         error_message: str | None = None,
         success: bool = True,
+        status_code: int | None = None,
     ):
-        self._results = [FakeResult(html, error_message, success)]
+        self._results = [FakeResult(html, error_message, success, status_code)]
 
 
 class FakeCrawler:
@@ -1038,7 +1042,76 @@ async def test_returned_result_launch_error_is_not_network_or_policy(fake_clock)
         result = await provider.fetch("https://example.com/")
         assert result.network_error is None
         assert result.policy_error is None
+        assert result.provider_error_kind == ProviderErrorKind.SERVICE
         assert result.error is not None
+    finally:
+        FakeCrawler.arun = original_arun
+        await provider.close()
+
+
+@pytest.mark.asyncio
+async def test_returned_result_failure_with_status_200_is_typed_provider_failure(fake_clock):
+    from crawl4ai_mcp.detect import classify
+    from crawl4ai_mcp.models import Decision
+
+    factory = FakeCrawlerFactory()
+    provider = BrowserProvider(
+        tier=Tier.STEALTH, factory=factory, idle_seconds=180,
+        semaphore=asyncio.Semaphore(2), clock=fake_clock,
+        egress_proxy=FakePinnedProxy(), request_guard=FakeRequestGuard(),
+    )
+    original_arun = FakeCrawler.arun
+
+    async def failed_200_arun(self, url, config=None):
+        self.configs.append(config)
+        return FakeContainer(
+            html="",
+            error_message="scrape pipeline crashed after load",
+            success=False,
+            status_code=200,
+        )
+
+    FakeCrawler.arun = failed_200_arun
+    try:
+        result = await provider.fetch("https://example.com/")
+        assert result.target_status_code == 200
+        assert result.network_error is None
+        assert result.policy_error is None
+        assert result.provider_error_kind == ProviderErrorKind.SERVICE
+        assert classify(result) == Decision.PROVIDER_FAILURE
+    finally:
+        FakeCrawler.arun = original_arun
+        await provider.close()
+
+
+@pytest.mark.asyncio
+async def test_returned_result_failure_with_terminal_status_stays_terminal(fake_clock):
+    from crawl4ai_mcp.detect import classify
+    from crawl4ai_mcp.models import Decision
+
+    factory = FakeCrawlerFactory()
+    provider = BrowserProvider(
+        tier=Tier.STEALTH, factory=factory, idle_seconds=180,
+        semaphore=asyncio.Semaphore(2), clock=fake_clock,
+        egress_proxy=FakePinnedProxy(), request_guard=FakeRequestGuard(),
+    )
+    original_arun = FakeCrawler.arun
+
+    async def failed_404_arun(self, url, config=None):
+        self.configs.append(config)
+        return FakeContainer(
+            html="",
+            error_message="page not found handling failed",
+            success=False,
+            status_code=404,
+        )
+
+    FakeCrawler.arun = failed_404_arun
+    try:
+        result = await provider.fetch("https://example.com/missing")
+        assert result.target_status_code == 404
+        assert result.provider_error_kind is None
+        assert classify(result) == Decision.TERMINAL
     finally:
         FakeCrawler.arun = original_arun
         await provider.close()

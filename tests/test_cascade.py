@@ -418,9 +418,12 @@ async def test_attempts_carry_full_metadata(engine_with_404):
 
 
 class _FakeResult:
-    def __init__(self, html="<main>Hello</main>", error_message=None, success=True):
+    def __init__(self, html="<main>Hello</main>", error_message=None, success=True,
+                 status_code=None):
         self.html = html
-        self.status_code = 200 if success else None
+        self.status_code = (
+            status_code if status_code is not None else (200 if success else None)
+        )
         self.response_headers = {}
         self.redirected_url = None
         self.error_message = error_message
@@ -546,6 +549,52 @@ async def test_returned_browser_network_failure_never_reaches_paid_tiers(tmp_pat
         assert paid_calls == []
         assert outcome.response.status == "failed"
     finally:
+        await provider.close()
+        await policy.close()
+
+
+@pytest.mark.asyncio
+async def test_returned_browser_failure_200_falls_to_next_tier_without_empty_success(tmp_path):
+    from crawl4ai_mcp.egress import BrowserRequestGuard, UrlPolicy
+
+    async def resolver(_host, _port):
+        return [ipaddress.ip_address("93.184.216.34")]
+
+    guard = BrowserRequestGuard(UrlPolicy(resolver))
+
+    async def failed_200_arun(self, url, config=None):
+        return _FakeContainer(
+            html="",
+            error_message="scrape pipeline crashed after load",
+            success=False,
+            status_code=200,
+        )
+
+    provider = make_browser_provider(lambda: _FakeContainer(), guard=guard)
+    paid_calls = []
+    providers = {
+        Tier.STEALTH: provider,
+        Tier.RAYOBYTE: ScriptedProvider(
+            Tier.RAYOBYTE,
+            lambda url, tier: paid_calls.append(tier) or success(url, tier),
+        ),
+    }
+    policy = await PolicyStore.open(tmp_path / "policy.db")
+    engine = CascadeEngine(providers, policy, threshold=200, clock=FakeClock(1000))
+    original_arun = _FakeCrawler.arun
+    _FakeCrawler.arun = failed_200_arun
+    try:
+        outcome = await engine.scrape("https://example.com/", force=Tier.STEALTH)
+        assert [attempt.tier for attempt in outcome.response.attempts] == [
+            "stealth", "rayobyte",
+        ]
+        assert outcome.response.attempts[0].decision == Decision.PROVIDER_FAILURE
+        assert outcome.response.attempts[0].provider_error_kind == ProviderErrorKind.SERVICE
+        assert outcome.response.status == "success"
+        assert outcome.response.content == "# Fine"
+        assert paid_calls == [Tier.RAYOBYTE]
+    finally:
+        _FakeCrawler.arun = original_arun
         await provider.close()
         await policy.close()
 

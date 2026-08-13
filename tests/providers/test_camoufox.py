@@ -787,3 +787,27 @@ async def test_camoufox_recorder_is_cleaned_up_after_fetch():
         assert guard._by_task == {}
     finally:
         await provider.close()
+
+
+@pytest.mark.asyncio
+async def test_camoufox_goto_failure_is_never_target_success():
+    from crawl4ai_mcp.detect import classify
+    from crawl4ai_mcp.models import Decision
+
+    launcher = FakeLauncher()
+    provider = make_provider(launcher=launcher)
+    original_goto = FakePage.goto
+
+    async def generic_failing_goto(self, url, **kwargs):
+        raise RuntimeError("browser session crashed")
+
+    FakePage.goto = generic_failing_goto
+    try:
+        result = await provider.fetch("https://example.com/")
+        assert result.target_status_code is None
+        assert result.network_error is None
+        assert classify(result) == Decision.FAILED
+        assert classify(result) not in {Decision.SUCCESS, Decision.SHORT_STATIC}
+    finally:
+        FakePage.goto = original_goto
+        await provider.close()

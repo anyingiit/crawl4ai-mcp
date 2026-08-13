@@ -13,6 +13,7 @@ from crawl4ai.async_configs import (
 from crawl4ai.async_crawler_strategy import AsyncPlaywrightCrawlerStrategy
 from crawl4ai.browser_adapter import UndetectedAdapter
 
+from crawl4ai_mcp.detect import TERMINAL_STATUSES
 from crawl4ai_mcp.egress import BrowserRequestGuard, PinnedEgressProxy, UpstreamProxy
 from crawl4ai_mcp.models import (
     CostKind,
@@ -21,7 +22,7 @@ from crawl4ai_mcp.models import (
     ProviderErrorKind,
     Tier,
 )
-from crawl4ai_mcp.providers.base import failed_result
+from crawl4ai_mcp.providers.base import failed_result, safe_error_detail
 from crawl4ai_mcp.providers.browser_errors import FetchStage, browser_network_error
 
 
@@ -194,12 +195,30 @@ class BrowserProvider:
                         else None
                     )
                     policy_error = self._blocked_policy_error(recorder)
+                    status_code = getattr(result, "status_code", None)
+                    if network_error or policy_error:
+                        return failed_result(
+                            url, self.tier, self.cost_kind,
+                            error_message or "browser fetch failed", started,
+                            target_status_code=status_code,
+                            network_error=network_error,
+                            policy_error=policy_error,
+                        )
+                    if status_code in TERMINAL_STATUSES:
+                        return failed_result(
+                            url, self.tier, self.cost_kind,
+                            error_message or "browser fetch failed", started,
+                            target_status_code=status_code,
+                        )
+                    # An explicit failed result must never classify as
+                    # target success: type it as a provider failure so
+                    # the cascade falls through to the next tier.
                     return failed_result(
                         url, self.tier, self.cost_kind,
                         error_message or "browser fetch failed", started,
-                        target_status_code=getattr(result, "status_code", None),
-                        network_error=network_error,
-                        policy_error=policy_error,
+                        target_status_code=status_code,
+                        provider_error_kind=ProviderErrorKind.SERVICE,
+                        provider_error=safe_error_detail(error_message or ""),
                     )
                 return FetchResult(
                     url=url,
