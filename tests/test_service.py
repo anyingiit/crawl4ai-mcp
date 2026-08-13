@@ -565,3 +565,105 @@ def test_parse_upstream_proxy_rejects_missing_host():
         parse_upstream_proxy("http://:8080")
     with pytest.raises(ValueError):
         parse_upstream_proxy("http://user@:8080")
+
+
+def test_parse_upstream_proxy_accepts_explicit_credentials():
+    proxy = parse_upstream_proxy("http://proxy.example:8080", "user", "pass")
+    assert proxy.server == "http://proxy.example:8080"
+    assert proxy.username == "user"
+    assert proxy.password == "pass"
+
+
+@pytest.mark.parametrize("username,password", [("user", None), (None, "pass")])
+def test_parse_upstream_proxy_rejects_partial_credentials(username, password):
+    with pytest.raises(ValueError, match="username and password"):
+        parse_upstream_proxy("http://proxy.example:8080", username, password)
+
+
+def test_parse_upstream_proxy_userinfo_still_rejected_with_credentials():
+    with pytest.raises(ValueError, match="userinfo"):
+        parse_upstream_proxy("http://user:pass@proxy.example:8080", "u", "p")
+
+
+@pytest.mark.asyncio
+async def test_proxy_pool_entries_carry_pool_specific_credentials(config):
+    config = config.model_copy(
+        update={
+            "webshare_proxies": ["http://ws.proxy.example:8080"],
+            "oxylabs_proxies": ["http://dc.oxylabs.example:8000"],
+            "webshare_proxy_username": "ws-user",
+            "webshare_proxy_password": "ws-pass",
+            "oxylabs_proxy_username": "ox-user",
+            "oxylabs_proxy_password": "ox-pass",
+        }
+    )
+    service = await make_service(config)
+    try:
+        pool = service.providers[Tier.PROXY].proxy_pool
+        assert [entry.server for entry in pool] == [
+            "http://ws.proxy.example:8080",
+            "http://dc.oxylabs.example:8000",
+        ]
+        assert pool[0].username == "ws-user"
+        assert pool[0].password == "ws-pass"
+        assert pool[1].username == "ox-user"
+        assert pool[1].password == "ox-pass"
+    finally:
+        await service.close()
+
+
+@pytest.mark.asyncio
+async def test_partial_credential_pool_marks_proxy_unavailable(config):
+    config = config.model_copy(
+        update={
+            "webshare_proxies": ["http://ws.proxy.example:8080"],
+            "webshare_proxy_username": "only-user",
+        }
+    )
+    service = await make_service(config)
+    try:
+        availability = service.providers[Tier.PROXY].availability()
+        assert availability.ready is False
+        assert "webshare" in availability.reason
+        assert "username and password" in availability.reason
+    finally:
+        await service.close()
+
+
+@pytest.mark.asyncio
+async def test_credential_free_pool_stays_valid(config):
+    config = config.model_copy(
+        update={"oxylabs_proxies": ["http://dc.oxylabs.example:8000"]}
+    )
+    service = await make_service(config)
+    try:
+        availability = service.providers[Tier.PROXY].availability()
+        assert availability.ready is True
+        entry = service.providers[Tier.PROXY].proxy_pool[0]
+        assert entry.username is None
+        assert entry.password is None
+    finally:
+        await service.close()
+
+
+@pytest.mark.asyncio
+async def test_pool_credentials_reach_connect_authorization(config):
+    import base64
+
+    from crawl4ai_mcp.egress import build_upstream_connect
+
+    config = config.model_copy(
+        update={
+            "webshare_proxies": ["http://ws.proxy.example:8080"],
+            "webshare_proxy_username": "ws-user",
+            "webshare_proxy_password": "ws-pass",
+        }
+    )
+    service = await make_service(config)
+    try:
+        upstream = service.providers[Tier.PROXY].proxy_pool[0]
+        request = build_upstream_connect("93.184.216.34", 443, upstream)
+        token = base64.b64encode(b"ws-user:ws-pass").decode()
+        assert f"Proxy-Authorization: Basic {token}".encode() in request
+    finally:
+        await service.close()

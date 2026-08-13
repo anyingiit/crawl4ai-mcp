@@ -71,6 +71,7 @@ cp .env.example .env && chmod 600 .env      # 填入密钥（见 .env.example）
 - 同源判断比较规范化后的 scheme/host/有效端口；重定向逃逸同源范围即拒绝
 - 本地 pinning 代理对客户端只返回固定公开原因短语（`403 blocked by policy` / `502 tunnel failed`），不反射被拒 URL、凭据或内部 socket/DNS 异常文本
 - 上游代理配置只接受 `http/https`，URL 内不得携带 userinfo/path/query/fragment（凭据走显式字段），非法端口与缺失主机直接拒绝
+- 代理池凭据按池注入：`WEBSHARE_PROXY_USERNAME`/`WEBSHARE_PROXY_PASSWORD` 与 `OXYLABS_PROXY_USERNAME`/`OXYLABS_PROXY_PASSWORD`（见 `.env.example`），两池互不混淆；用户/密码只填一个即配置错误，`diagnose` 中 PROXY 层 `ready=false` 并给出明确原因，认证 CONNECT 携带正确的 `Proxy-Authorization`
 
 ## 提供商模型与失败语义
 

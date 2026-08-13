@@ -47,16 +47,25 @@ def parse_tier(value: str | None) -> Tier | None:
         ) from None
 
 
-def parse_upstream_proxy(url: str) -> UpstreamProxy:
+def parse_upstream_proxy(
+    url: str, username: str | None = None, password: str | None = None
+) -> UpstreamProxy:
     """Validate an upstream proxy configuration URL.
 
     Only http/https is accepted, without URL userinfo, path, query, or
     fragment; credentials belong in explicit username/password fields.
     The host is canonicalized through the shared URL policy, invalid
     ports are rejected with sanitized messages, and missing hosts fail.
+    Credentials must be provided as a pair; a lone username or password
+    is a configuration error.
     """
     if not isinstance(url, str) or not url.strip():
         raise ValueError("proxy url must not be empty")
+    if bool(username) != bool(password):
+        raise ValueError(
+            "proxy credentials require both username and password; "
+            "set either both or neither"
+        )
     value = url.strip()
     if "://" not in value:
         value = f"http://{value}"
@@ -94,7 +103,11 @@ def parse_upstream_proxy(url: str) -> UpstreamProxy:
         validated = parse_public_url(f"{scheme}://{parts.hostname}:{port}/")
     except UrlPolicyError as exc:
         raise ValueError(str(exc)) from exc
-    return UpstreamProxy(server=f"{scheme}://{validated.host}:{port}")
+    return UpstreamProxy(
+        server=f"{scheme}://{validated.host}:{port}",
+        username=username,
+        password=password,
+    )
 
 
 class CrawlService:
@@ -148,16 +161,41 @@ class CrawlService:
                 request_guard=self._request_guard,
             )
         if Tier.PROXY in enabled:
-            proxies = list(self.config.webshare_proxies) + list(
-                self.config.oxylabs_proxies
-            )
+            entries: list[UpstreamProxy] = []
+            problems: list[str] = []
+            for pool, urls, username, password in (
+                (
+                    "webshare proxies",
+                    self.config.webshare_proxies,
+                    self.config.webshare_proxy_username,
+                    self.config.webshare_proxy_password,
+                ),
+                (
+                    "oxylabs proxies",
+                    self.config.oxylabs_proxies,
+                    self.config.oxylabs_proxy_username,
+                    self.config.oxylabs_proxy_password,
+                ),
+            ):
+                if not urls:
+                    continue
+                if bool(username) != bool(password):
+                    problems.append(
+                        f"{pool} require both username and password; "
+                        "set either both or neither"
+                    )
+                    continue
+                entries.extend(
+                    parse_upstream_proxy(url, username, password) for url in urls
+                )
             providers[Tier.PROXY] = BrowserProvider(
                 Tier.PROXY,
                 self.config.chromium_idle_seconds,
                 semaphore,
                 egress_proxy=self._egress_proxy,
                 request_guard=self._request_guard,
-                proxy_pool=[parse_upstream_proxy(proxy) for proxy in proxies],
+                proxy_pool=entries,
+                availability_reason="; ".join(problems) or None,
             )
         if Tier.RAYOBYTE in enabled:
             providers[Tier.RAYOBYTE] = RayobyteProvider(

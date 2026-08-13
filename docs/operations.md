@@ -133,7 +133,11 @@ RAYOBYTE_API_URL=https://api.scraping.rayobyte.com/
 RAYOBYTE_API_KEY=
 FIRECRAWL_API_KEY=
 WEBSHARE_PROXIES=
+WEBSHARE_PROXY_USERNAME=
+WEBSHARE_PROXY_PASSWORD=
 OXYLABS_PROXIES=http://dc.oxylabs.io:8000
+OXYLABS_PROXY_USERNAME=
+OXYLABS_PROXY_PASSWORD=
 ```
 
 修改后：
@@ -144,7 +148,8 @@ systemctl --user restart crawl4ai-mcp.service
 ```
 
 - 代理列表用逗号分隔，逐条轮转（PROXY 层）。
-- 代理 URL 只接受 `http/https`，不得含 userinfo/path/query/fragment；上游代理凭据按已验证的契约应走显式字段（`UpstreamProxy.username/password`），当前部署尚无凭据注入通道，带认证的代理池暂不可用（见 2026-08-13 二次修复报告残留项）。
+- 代理 URL 只接受 `http/https`，不得含 userinfo/path/query/fragment；凭据走显式字段：WebShare 池用 `WEBSHARE_PROXY_USERNAME`/`WEBSHARE_PROXY_PASSWORD`，Oxylabs 池用 `OXYLABS_PROXY_USERNAME`/`OXYLABS_PROXY_PASSWORD`，两池互不混淆。URL 内若残留 userinfo（`http://user:pass@host:port`）会被拒绝；用户/密码只填一个视为配置错误（启动即报错，且 `diagnose` 中 PROXY 层 ready=false 并给出明确原因）。
+- 无凭据的代理 URL 按未认证代理使用（适合真正免认证的端点）；需要认证的池必须成对提供用户名与密码。
 - 密钥留空 = 该提供商不可用（`diagnose` 中 ready=false），服务照常启动。
 - 更换密钥后旧的失效即可，无需清理策略库。
 

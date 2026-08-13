@@ -68,6 +68,7 @@ class BrowserProvider:
         egress_proxy: PinnedEgressProxy,
         request_guard: BrowserRequestGuard,
         proxy_pool: Sequence[UpstreamProxy] = (),
+        availability_reason: str | None = None,
         factory: Callable | None = None,
         clock: Callable | None = None,
     ):
@@ -78,6 +79,7 @@ class BrowserProvider:
         self.egress_proxy = egress_proxy
         self.request_guard = request_guard
         self.proxy_pool = list(proxy_pool)
+        self.availability_reason = availability_reason
         self._proxy_index = 0
         self._factory = factory or (lambda: default_factory(self.tier))
         self._clock = clock or time.monotonic
@@ -308,8 +310,13 @@ class BrowserProvider:
         return self._crawler is not None
 
     def availability(self) -> ProviderAvailability:
-        if self.tier == Tier.PROXY and not self.proxy_pool:
-            return ProviderAvailability(
-                enabled=True, ready=False, reason="no proxies configured"
-            )
+        if self.tier == Tier.PROXY:
+            if self.availability_reason is not None:
+                return ProviderAvailability(
+                    enabled=True, ready=False, reason=self.availability_reason
+                )
+            if not self.proxy_pool:
+                return ProviderAvailability(
+                    enabled=True, ready=False, reason="no proxies configured"
+                )
         return ProviderAvailability(enabled=True, ready=True)
