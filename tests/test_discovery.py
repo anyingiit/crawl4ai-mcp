@@ -1,9 +1,11 @@
 import ipaddress
 
+import httpx
 import pytest
 from crawl4ai.async_configs import ProxyConfig
+from crawl4ai.async_url_seeder import COLLINFO_URL
 from crawl4ai_mcp.cascade import CascadeEngine
-from crawl4ai_mcp.discovery import crawl_site, map_urls
+from crawl4ai_mcp.discovery import PinnedUrlSeeder, crawl_site, map_urls
 from crawl4ai_mcp.egress import UrlPolicy, UrlPolicyError
 from crawl4ai_mcp.models import CostKind, FetchResult, ProviderAvailability, Tier
 from crawl4ai_mcp.policy import PolicyStore
@@ -96,6 +98,121 @@ async def test_map_urls_routes_seeder_client_through_pinning_proxy():
     factory = SeederFactory()
     await map_urls("https://example.com/", policy=public_policy(), proxy=FakePinnedProxy(), seeder_factory=factory)
     assert factory.clients[0].proxy_url == "http://127.0.0.1:41000"
+
+
+class FakeIndexResponse:
+    def __init__(self, payload):
+        self.payload = payload
+
+    def raise_for_status(self):
+        return None
+
+    def json(self):
+        return self.payload
+
+
+class FakeIndexClient:
+    def __init__(self, payload=None):
+        self.payload = payload or [{"id": "CC-MAIN-2026-30"}]
+        self.calls = []
+
+    async def get(self, url, timeout=30):
+        self.calls.append((url, timeout))
+        return FakeIndexResponse(self.payload)
+
+
+def forbid_unconfigured_client(*args, **kwargs):
+    raise AssertionError("unconfigured httpx.AsyncClient constructed")
+
+
+@pytest.mark.asyncio
+async def test_pinned_seeder_latest_index_uses_injected_client(tmp_path):
+    client = FakeIndexClient()
+    seeder = PinnedUrlSeeder(
+        client=client,
+        base_directory=tmp_path / "base",
+        cache_root=tmp_path / "cache",
+    )
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(httpx, "AsyncClient", forbid_unconfigured_client)
+        index = await seeder._latest_index()
+    assert index == "CC-MAIN-2026-30"
+    assert client.calls == [(COLLINFO_URL, 10)]
+    assert seeder.index_cache_path.read_text() == "CC-MAIN-2026-30"
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(httpx, "AsyncClient", forbid_unconfigured_client)
+        cached = await seeder._latest_index()
+    assert cached == "CC-MAIN-2026-30"
+    assert client.calls == [(COLLINFO_URL, 10)]
+
+
+class ExplodingSeeder:
+    def __init__(self, urls_error=None, close_error=None):
+        self.urls_error = urls_error
+        self.close_error = close_error
+        self.closed = False
+
+    async def urls(self, domain, config):
+        if self.urls_error is not None:
+            raise self.urls_error
+        return []
+
+    async def close(self):
+        self.closed = True
+        if self.close_error is not None:
+            raise self.close_error
+
+
+class ExplodingSeederFactory:
+    def __init__(self, urls_error=None, close_error=None):
+        self.clients = []
+        self.calls = []
+        self.urls_error = urls_error
+        self.close_error = close_error
+
+    def __call__(self, client):
+        self.clients.append(client)
+        seeder = ExplodingSeeder(self.urls_error, self.close_error)
+        self.calls.append(seeder)
+        return seeder
+
+
+class ExplodingClientFactory:
+    def __init__(self, error=RuntimeError("seeder factory failed")):
+        self.clients = []
+        self.calls = []
+        self.error = error
+
+    def __call__(self, client):
+        self.clients.append(client)
+        raise self.error
+
+
+@pytest.mark.asyncio
+async def test_map_urls_closes_client_when_seeder_factory_raises():
+    factory = ExplodingClientFactory()
+    with pytest.raises(RuntimeError):
+        await map_urls("https://example.com/", policy=public_policy(), proxy=FakePinnedProxy(), seeder_factory=factory)
+    assert factory.clients[0].is_closed is True
+    assert factory.calls == []
+
+
+@pytest.mark.asyncio
+async def test_map_urls_closes_seeder_and_client_when_urls_raises():
+    factory = ExplodingSeederFactory(urls_error=RuntimeError("boom"))
+    with pytest.raises(RuntimeError):
+        await map_urls("https://example.com/", policy=public_policy(), proxy=FakePinnedProxy(), seeder_factory=factory)
+    assert factory.calls[0].closed is True
+    assert factory.clients[0].is_closed is True
+
+
+@pytest.mark.asyncio
+async def test_map_urls_closes_client_when_seeder_close_raises():
+    factory = ExplodingSeederFactory(close_error=RuntimeError("close boom"))
+    with pytest.raises(RuntimeError):
+        await map_urls("https://example.com/", policy=public_policy(), proxy=FakePinnedProxy(), seeder_factory=factory)
+    assert factory.calls[0].closed is True
+    assert factory.clients[0].is_closed is True
 
 
 @pytest.mark.asyncio

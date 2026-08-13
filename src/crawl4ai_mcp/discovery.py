@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import time
 from collections import deque
 from fnmatch import fnmatch
 from urllib.parse import urlsplit, urlunsplit, urljoin
 
 import httpx
 from bs4 import BeautifulSoup
+from crawl4ai.async_url_seeder import COLLINFO_URL, AsyncUrlSeeder
 
 from crawl4ai_mcp.egress import PinnedEgressProxy, UrlPolicy
 from crawl4ai_mcp.models import ScrapeResult, Tier
@@ -24,6 +26,66 @@ def _without_fragment(url: str) -> str:
     return urlunsplit(parts._replace(fragment=""))
 
 
+class PinnedUrlSeeder(AsyncUrlSeeder):
+    """AsyncUrlSeeder that fetches the Common Crawl index via the injected
+    pinned client instead of constructing an unconfigured httpx client."""
+
+    async def _latest_index(self) -> str:
+        if self.index_cache_path.exists() and (
+            time.time() - self.index_cache_path.stat().st_mtime
+        ) < self.ttl.total_seconds():
+            self._log(
+                "info",
+                "Loading latest CC index from cache: {path}",
+                params={"path": self.index_cache_path},
+                tag="URL_SEED",
+            )
+            return self.index_cache_path.read_text().strip()
+
+        self._log(
+            "info",
+            "Fetching latest Common Crawl index from {url}",
+            params={"url": COLLINFO_URL},
+            tag="URL_SEED",
+        )
+        try:
+            j = await self.client.get(COLLINFO_URL, timeout=10)
+            j.raise_for_status()
+            idx = j.json()[0]["id"]
+            self.index_cache_path.write_text(idx)
+            self._log(
+                "success",
+                "Successfully fetched and cached CC index: {index_id}",
+                params={"index_id": idx},
+                tag="URL_SEED",
+            )
+            return idx
+        except httpx.RequestError as exc:
+            self._log(
+                "error",
+                "Network error fetching CC index info: {error}",
+                params={"error": str(exc)},
+                tag="URL_SEED",
+            )
+            raise
+        except httpx.HTTPStatusError as exc:
+            self._log(
+                "error",
+                "HTTP error fetching CC index info: {status_code}",
+                params={"status_code": exc.response.status_code},
+                tag="URL_SEED",
+            )
+            raise
+        except Exception as exc:
+            self._log(
+                "error",
+                "Unexpected error fetching CC index info: {error}",
+                params={"error": str(exc)},
+                tag="URL_SEED",
+            )
+            raise
+
+
 async def map_urls(
     url: str,
     search: str | None = None,
@@ -39,7 +101,6 @@ async def map_urls(
     await policy.resolve(url)
 
     from crawl4ai.async_configs import SeedingConfig
-    from crawl4ai.async_url_seeder import AsyncUrlSeeder
 
     endpoint = proxy.endpoint()
     client = httpx.AsyncClient(
@@ -48,23 +109,25 @@ async def map_urls(
         follow_redirects=True,
         timeout=30,
     )
-    seeder = (
-        seeder_factory(client)
-        if seeder_factory is not None
-        else AsyncUrlSeeder(client=client)
-    )
     try:
-        config = SeedingConfig(
-            source="sitemap+cc",
-            max_urls=limit,
-            concurrency=20,
-            hits_per_sec=5,
-            query=search,
-            extract_head=bool(search),
+        seeder = (
+            seeder_factory(client)
+            if seeder_factory is not None
+            else PinnedUrlSeeder(client=client)
         )
-        entries = await seeder.urls(domain, config)
+        try:
+            config = SeedingConfig(
+                source="sitemap+cc",
+                max_urls=limit,
+                concurrency=20,
+                hits_per_sec=5,
+                query=search,
+                extract_head=bool(search),
+            )
+            entries = await seeder.urls(domain, config)
+        finally:
+            await seeder.close()
     finally:
-        await seeder.close()
         await client.aclose()
 
     seen: set[str] = set()

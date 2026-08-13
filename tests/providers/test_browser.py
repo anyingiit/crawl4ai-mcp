@@ -23,11 +23,11 @@ def private_policy() -> UrlPolicy:
 
 class FakeRoute:
     def __init__(self):
-        self.continued = False
+        self.fell_back = False
         self.aborted = False
 
-    async def continue_(self):
-        self.continued = True
+    async def fallback(self):
+        self.fell_back = True
 
     async def abort(self, _reason="blockedbyclient"):
         self.aborted = True
@@ -36,6 +36,17 @@ class FakeRoute:
 class FakeRequest:
     def __init__(self, url: str):
         self.url = url
+
+
+class FakeRouteContext:
+    def __init__(self):
+        self.route_calls = 0
+        self.raise_on_route = False
+
+    async def route(self, pattern, handler):
+        self.route_calls += 1
+        if self.raise_on_route:
+            raise RuntimeError("route registration failed")
 
 
 class FakePinnedProxy:
@@ -187,14 +198,35 @@ async def test_third_call_waits_for_semaphore(fake_clock):
 async def test_browser_guard_allows_public_cross_origin_subresource():
     route = FakeRoute()
     await BrowserRequestGuard(public_policy()).handle(route, FakeRequest("https://cdn.example.net/app.js"))
-    assert route.continued and not route.aborted
+    assert route.fell_back and not route.aborted
 
 
 @pytest.mark.asyncio
 async def test_browser_guard_aborts_private_subresource():
     route = FakeRoute()
     await BrowserRequestGuard(public_policy()).handle(route, FakeRequest("http://192.168.1.1/admin"))
-    assert route.aborted and not route.continued
+    assert route.aborted and not route.fell_back
+
+
+@pytest.mark.asyncio
+async def test_browser_guard_install_is_idempotent_per_context():
+    guard = BrowserRequestGuard(public_policy())
+    context = FakeRouteContext()
+    await guard.install(context)
+    await guard.install(context)
+    assert context.route_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_browser_guard_install_rolls_back_on_route_registration_failure():
+    guard = BrowserRequestGuard(public_policy())
+    context = FakeRouteContext()
+    context.raise_on_route = True
+    with pytest.raises(RuntimeError):
+        await guard.install(context)
+    context.raise_on_route = False
+    await guard.install(context)
+    assert context.route_calls == 2
 
 
 @pytest.mark.asyncio

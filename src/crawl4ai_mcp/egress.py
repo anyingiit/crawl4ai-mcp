@@ -5,6 +5,7 @@ import base64
 import ipaddress
 import socket
 import ssl
+import weakref
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import Awaitable, Callable, Sequence
@@ -249,13 +250,23 @@ class BrowserRequestGuard:
 
     Syntax and credential violations fail fast inside the browser; the
     pinning proxy remains the enforcement point for DNS and dial safety.
+    Allowed requests fall back to previously registered handlers so
+    crawl4ai's own route logic still runs.
     """
 
     def __init__(self, policy: UrlPolicy):
         self._policy = policy
+        self._installed = weakref.WeakSet()
 
     async def install(self, context) -> None:
-        await context.route("**/*", self.handle)
+        if context in self._installed:
+            return
+        self._installed.add(context)
+        try:
+            await context.route("**/*", self.handle)
+        except BaseException:
+            self._installed.discard(context)
+            raise
 
     async def handle(self, route, request) -> None:
         try:
@@ -263,7 +274,7 @@ class BrowserRequestGuard:
         except UrlPolicyError:
             await route.abort()
         else:
-            await route.continue_()
+            await route.fallback()
 
 
 _MAX_HEADER_BYTES = 64 * 1024
