@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import asyncio
 import sqlite3
+import time
 
 from pydantic import BaseModel
 from aiosqlite import Connection, connect
@@ -10,6 +12,23 @@ from crawl4ai_mcp.models import Tier
 
 DAY_SECONDS = 86_400
 BACKOFF_SEQUENCE = (600, 3_600, 21_600, 86_400)
+
+_FAILURE_UPSERT = """
+INSERT INTO domain_policy (domain, fail_count, last_error_kind, cooldown_until, updated_at)
+VALUES (?, 1, ?, ? + 600, ?)
+ON CONFLICT(domain) DO UPDATE SET
+    fail_count = domain_policy.fail_count + 1,
+    last_error_kind = excluded.last_error_kind,
+    cooldown_until = excluded.updated_at + CASE
+        WHEN domain_policy.fail_count + 1 >= 4 THEN 86400
+        WHEN domain_policy.fail_count + 1 = 3 THEN 21600
+        WHEN domain_policy.fail_count + 1 = 2 THEN 3600
+        ELSE 600
+    END,
+    updated_at = excluded.updated_at
+RETURNING domain, best_tier, last_success_at, fail_count,
+          cooldown_until, last_error_kind, updated_at
+"""
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS domain_policy (
@@ -54,6 +73,7 @@ class PolicyStore:
     def __init__(self, conn: Connection, decay_days: int):
         self._conn = conn
         self.decay_days = decay_days
+        self._mutation_lock = asyncio.Lock()
 
     @classmethod
     async def open(cls, path, decay_days: int = 7) -> "PolicyStore":
@@ -82,23 +102,24 @@ class PolicyStore:
 
     async def record_success(self, url: str, tier: Tier, now: int | None = None) -> DomainPolicy:
         domain = normalize_domain(url)
-        updated_at = now if now is not None else int(__import__("time").time())
-        await self._conn.execute(
-            """
-            INSERT INTO domain_policy (domain, best_tier, last_success_at, fail_count,
-                                       cooldown_until, last_error_kind, updated_at)
-            VALUES (?, ?, ?, 0, NULL, NULL, ?)
-            ON CONFLICT(domain) DO UPDATE SET
-                best_tier = excluded.best_tier,
-                last_success_at = excluded.last_success_at,
-                fail_count = 0,
-                cooldown_until = NULL,
-                last_error_kind = NULL,
-                updated_at = excluded.updated_at
-            """,
-            (domain, int(tier), updated_at, updated_at),
-        )
-        await self._conn.commit()
+        updated_at = now if now is not None else int(time.time())
+        async with self._mutation_lock:
+            await self._conn.execute(
+                """
+                INSERT INTO domain_policy (domain, best_tier, last_success_at, fail_count,
+                                           cooldown_until, last_error_kind, updated_at)
+                VALUES (?, ?, ?, 0, NULL, NULL, ?)
+                ON CONFLICT(domain) DO UPDATE SET
+                    best_tier = excluded.best_tier,
+                    last_success_at = excluded.last_success_at,
+                    fail_count = 0,
+                    cooldown_until = NULL,
+                    last_error_kind = NULL,
+                    updated_at = excluded.updated_at
+                """,
+                (domain, int(tier), updated_at, updated_at),
+            )
+            await self._conn.commit()
         return DomainPolicy(
             domain=domain, best_tier=tier, last_success_at=updated_at,
             updated_at=updated_at,
@@ -108,33 +129,13 @@ class PolicyStore:
         self, url: str, error_kind: str, now: int | None = None
     ) -> DomainPolicy:
         domain = normalize_domain(url)
-        updated_at = now if now is not None else int(__import__("time").time())
-        await self._conn.execute(
-            """
-            INSERT INTO domain_policy (domain, fail_count, last_error_kind, updated_at)
-            VALUES (?, 1, ?, ?)
-            ON CONFLICT(domain) DO UPDATE SET
-                fail_count = domain_policy.fail_count + 1,
-                last_error_kind = excluded.last_error_kind,
-                updated_at = excluded.updated_at
-            """,
-            (domain, error_kind, updated_at),
-        )
-        await self._conn.commit()
-        async with self._conn.execute(
-            "SELECT * FROM domain_policy WHERE domain = ?", (domain,)
-        ) as cursor:
-            row = await cursor.fetchone()
-        policy = _row_to_policy(row)
-        index = min(policy.fail_count, len(BACKOFF_SEQUENCE)) - 1
-        cooldown_until = updated_at + BACKOFF_SEQUENCE[index]
-        await self._conn.execute(
-            "UPDATE domain_policy SET cooldown_until = ? WHERE domain = ?",
-            (cooldown_until, domain),
-        )
-        await self._conn.commit()
-        policy.cooldown_until = cooldown_until
-        return policy
+        updated_at = now if now is not None else int(time.time())
+        async with self._mutation_lock:
+            rows = await self._conn.execute_fetchall(
+                _FAILURE_UPSERT, (domain, error_kind, updated_at, updated_at)
+            )
+            await self._conn.commit()
+        return _row_to_policy(rows[0])
 
     async def get_active_cooldown(self, url: str, now: int) -> DomainPolicy | None:
         domain = normalize_domain(url)

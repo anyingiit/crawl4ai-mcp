@@ -1,3 +1,5 @@
+import asyncio
+
 import pytest
 from crawl4ai_mcp.egress import UrlPolicyError
 from crawl4ai_mcp.models import Tier
@@ -83,4 +85,77 @@ async def test_active_cooldown_returns_cached_failure(tmp_path):
     policy = await store.get_active_cooldown("https://bad.example/y", now=1_100)
     assert policy is not None
     assert policy.last_error_kind == "all_failed"
+    await store.close()
+
+
+@pytest.mark.asyncio
+async def test_concurrent_failures_never_lose_increments(tmp_path):
+    store_a = await PolicyStore.open(tmp_path / "policy.db")
+    store_b = await PolicyStore.open(tmp_path / "policy.db")
+
+    async def fail_four(store):
+        for _ in range(4):
+            await store.record_failure(
+                "https://race.example/x", "all_failed", now=1_000
+            )
+
+    await asyncio.gather(fail_four(store_a), fail_four(store_b))
+    policy = await store_a.get_active_cooldown("https://race.example/x", now=1_000)
+    assert policy is not None
+    assert policy.fail_count == 8
+    assert policy.cooldown_until == 1_000 + 86_400
+    await store_a.close()
+    await store_b.close()
+
+
+@pytest.mark.asyncio
+async def test_concurrent_success_and_failure_never_leave_cooldown_with_zero_failures(tmp_path):
+    store_a = await PolicyStore.open(tmp_path / "policy.db")
+    store_b = await PolicyStore.open(tmp_path / "policy.db")
+
+    async def succeed_ten(store):
+        for _ in range(10):
+            await store.record_success(
+                "https://mix.example/x", Tier.STEALTH, now=1_000
+            )
+
+    async def fail_ten(store):
+        for _ in range(10):
+            await store.record_failure(
+                "https://mix.example/x", "all_failed", now=1_000
+            )
+
+    await asyncio.gather(succeed_ten(store_a), fail_ten(store_b))
+    row = (await store_a.list_policies())[0]
+    if row.fail_count == 0:
+        assert row.cooldown_until is None
+    else:
+        backoff = (600, 3_600, 21_600, 86_400)[min(row.fail_count, 4) - 1]
+        assert row.cooldown_until == 1_000 + backoff
+    await store_a.close()
+    await store_b.close()
+
+
+@pytest.mark.asyncio
+async def test_concurrent_successes_and_failures_serialize_without_mixed_rows(tmp_path):
+    store = await PolicyStore.open(tmp_path / "policy.db")
+    await asyncio.gather(
+        *(
+            store.record_success("https://same.example/x", Tier.UNDETECTED, now=1_000 + index)
+            if index % 2 == 0
+            else store.record_failure("https://same.example/x", "target_network", now=1_000 + index)
+            for index in range(12)
+        )
+    )
+    rows = await store.list_policies()
+    assert len(rows) == 1
+    row = rows[0]
+    if row.last_error_kind == "target_network":
+        assert row.fail_count == 1
+        assert row.cooldown_until is not None
+        assert row.cooldown_until >= 1_000 + 600
+    else:
+        assert row.fail_count == 0
+        assert row.cooldown_until is None
+        assert row.best_tier == Tier.UNDETECTED
     await store.close()
