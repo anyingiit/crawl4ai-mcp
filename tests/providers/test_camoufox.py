@@ -105,6 +105,7 @@ class FakeLauncher:
         self.error = error
         self.gate = gate
         self.sessions = []
+        self.started = asyncio.Event()
 
     async def __call__(self):
         self.calls += 1
@@ -112,6 +113,7 @@ class FakeLauncher:
             raise self.error
         session = FakeSession(FakeBrowser(self.gate))
         self.sessions.append(session)
+        self.started.set()
         return session
 
 
@@ -136,6 +138,125 @@ def make_provider(enabled=True, launcher=None, clock=None, semaphore=None):
         egress_proxy=FakePinnedProxy(),
         request_guard=FakeRequestGuard(),
     )
+
+
+@pytest.fixture
+def gate():
+    return asyncio.Event()
+
+
+@pytest.fixture
+def clock():
+    return FakeClock()
+
+
+@pytest.fixture
+def provider(gate, clock):
+    launcher = FakeLauncher(gate=gate)
+    p = CamoufoxProvider(
+        enabled=True,
+        idle_seconds=120,
+        semaphore=asyncio.Semaphore(2),
+        launcher=launcher,
+        clock=clock,
+        egress_proxy=FakePinnedProxy(),
+        request_guard=FakeRequestGuard(),
+    )
+    p.launcher = launcher
+    return p
+
+
+@pytest.mark.asyncio
+async def test_camoufox_reaper_does_not_close_active_session(provider, gate, clock):
+    fetch = asyncio.create_task(provider.fetch("https://example.com/slow"))
+    await provider.launcher.started.wait()
+    clock.advance(121)
+    await provider.reap_idle()
+    assert provider.launcher.sessions[0].closed is False
+    gate.set()
+    await fetch
+
+
+@pytest.mark.asyncio
+async def test_camoufox_close_waits_for_active_fetch(provider, gate):
+    fetch = asyncio.create_task(provider.fetch("https://example.com/slow"))
+    await provider.launcher.started.wait()
+    close = asyncio.create_task(provider.close())
+    await asyncio.sleep(0)
+    assert not close.done()
+    gate.set()
+    await fetch
+    await close
+    assert provider.launcher.sessions[0].closed is True
+
+
+@pytest.mark.asyncio
+async def test_concurrent_camoufox_first_fetches_launch_once():
+    launcher = FakeLauncher()
+    provider = make_provider(launcher=launcher)
+    await asyncio.gather(
+        provider.fetch("https://example.com/a"), provider.fetch("https://example.com/b")
+    )
+    assert launcher.calls == 1
+    await provider.close()
+
+
+@pytest.mark.asyncio
+async def test_camoufox_fetch_cancel_decrements_active_count(provider, gate):
+    fetch = asyncio.create_task(provider.fetch("https://example.com/slow"))
+    await provider.launcher.started.wait()
+    assert provider.active_fetch_count() == 1
+    fetch.cancel()
+    try:
+        await fetch
+        raise AssertionError("fetch was not cancelled")
+    except asyncio.CancelledError:
+        pass
+    assert provider.active_fetch_count() == 0
+    await provider.close()
+
+
+@pytest.mark.asyncio
+async def test_camoufox_repeated_close_is_idempotent(provider, gate):
+    fetch = asyncio.create_task(provider.fetch("https://example.com/slow"))
+    await provider.launcher.started.wait()
+    gate.set()
+    await fetch
+    await provider.close()
+    await provider.close()
+    assert provider.launcher.sessions[0].closed is True
+
+
+@pytest.mark.asyncio
+async def test_camoufox_concurrent_closes_do_not_deadlock(provider, gate):
+    fetch = asyncio.create_task(provider.fetch("https://example.com/slow"))
+    await provider.launcher.started.wait()
+    first = asyncio.create_task(provider.close())
+    second = asyncio.create_task(provider.close())
+    await asyncio.sleep(0)
+    assert not first.done()
+    assert not second.done()
+    gate.set()
+    await fetch
+    await asyncio.wait_for(asyncio.gather(first, second), timeout=5)
+    assert provider.launcher.sessions[0].closed is True
+
+
+@pytest.mark.asyncio
+async def test_camoufox_lifecycle_methods_report_activity(provider, gate, clock):
+    fetch = asyncio.create_task(provider.fetch("https://example.com/slow"))
+    await provider.launcher.started.wait()
+    assert provider.is_active() is True
+    assert provider.active_fetch_count() == 1
+    clock.advance(121)
+    await provider.reap_idle()
+    assert provider.launcher.sessions[0].closed is False
+    gate.set()
+    await fetch
+    assert provider.active_fetch_count() == 0
+    assert provider.last_used() == clock.now
+    await provider.close()
+    assert provider.is_active() is False
 
 
 @pytest.mark.asyncio

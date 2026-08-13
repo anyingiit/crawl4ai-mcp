@@ -244,9 +244,14 @@ class CrawlService:
             availability = provider.availability()
             provider_status[tier.name] = availability.model_dump(mode="json")
             active = getattr(provider, "is_active", None)
+            active_fetches = getattr(provider, "active_fetch_count", None)
+            last_used = getattr(provider, "last_used", None)
             browser_state[tier.name] = {
-                "active": bool(active()) if active is not None else None,
-                "last_used": getattr(provider, "_last_used", None),
+                "active": bool(active()) if callable(active) else None,
+                "active_fetches": (
+                    int(active_fetches()) if callable(active_fetches) else None
+                ),
+                "last_used": last_used() if callable(last_used) else None,
             }
         policies = await self.policy.list_policies(domain)
         return {

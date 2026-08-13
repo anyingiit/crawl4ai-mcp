@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import time
 from typing import Callable, Sequence
 
@@ -78,6 +79,9 @@ class BrowserProvider:
         )
         self._crawler = None
         self._last_used = 0.0
+        self._lifecycle = asyncio.Condition()
+        self._active_fetches = 0
+        self._closing = False
 
     def _next_upstream(self) -> UpstreamProxy | None:
         if self.tier != Tier.PROXY or not self.proxy_pool:
@@ -110,56 +114,94 @@ class BrowserProvider:
     async def fetch(self, url: str) -> FetchResult:
         started = time.monotonic()
         async with self._semaphore:
-            if self._crawler is None:
-                self._crawler = self._factory()
-                self._install_guard()
-            config = self._run_config()
-            try:
-                container = await self._crawler.arun(url=url, config=config)
-                results = getattr(container, "_results", container)
-                result = results[0] if isinstance(results, list) else results
-                self._last_used = self._clock()
-                return FetchResult(
-                    url=url,
-                    tier=self.tier,
-                    cost_kind=self.cost_kind,
-                    target_status_code=getattr(result, "status_code", None),
-                    html=getattr(result, "html", "") or "",
-                    headers=dict(getattr(result, "response_headers", None) or {}),
-                    redirected_url=getattr(result, "redirected_url", None),
-                    elapsed_ms=int((time.monotonic() - started) * 1000),
-                    error=getattr(result, "error_message", None),
-                )
-            except Exception as exc:
-                network_error = (
-                    "browser_navigation_failed"
-                    if browser_network_error(
-                        exc,
-                        operation=FetchStage.NAVIGATION,
-                        wrapped=True,
+            async with self._lifecycle:
+                if self._closing:
+                    return failed_result(
+                        url, self.tier, self.cost_kind, "provider closing", started
                     )
-                    else None
-                )
-                return failed_result(
-                    url, self.tier, self.cost_kind, str(exc), started,
-                    network_error=network_error,
-                )
-
-    async def _close_crawler(self) -> None:
-        if self._crawler is not None:
+                if self._crawler is None:
+                    self._crawler = self._factory()
+                    self._install_guard()
+                crawler = self._crawler
+                self._active_fetches += 1
             try:
-                await self._crawler.close()
-            except Exception:
-                pass
-            self._crawler = None
+                config = self._run_config()
+                try:
+                    container = await crawler.arun(url=url, config=config)
+                    results = getattr(container, "_results", container)
+                    result = results[0] if isinstance(results, list) else results
+                    return FetchResult(
+                        url=url,
+                        tier=self.tier,
+                        cost_kind=self.cost_kind,
+                        target_status_code=getattr(result, "status_code", None),
+                        html=getattr(result, "html", "") or "",
+                        headers=dict(getattr(result, "response_headers", None) or {}),
+                        redirected_url=getattr(result, "redirected_url", None),
+                        elapsed_ms=int((time.monotonic() - started) * 1000),
+                        error=getattr(result, "error_message", None),
+                    )
+                except Exception as exc:
+                    network_error = (
+                        "browser_navigation_failed"
+                        if browser_network_error(
+                            exc,
+                            operation=FetchStage.NAVIGATION,
+                            wrapped=True,
+                        )
+                        else None
+                    )
+                    return failed_result(
+                        url, self.tier, self.cost_kind, str(exc), started,
+                        network_error=network_error,
+                    )
+            finally:
+                async with self._lifecycle:
+                    self._active_fetches -= 1
+                    self._last_used = self._clock()
+                    self._lifecycle.notify_all()
 
     async def reap_idle(self, now: float | None = None) -> None:
         now = self._clock() if now is None else now
-        if self._crawler is not None and now - self._last_used >= self.idle_seconds:
-            await self._close_crawler()
+        async with self._lifecycle:
+            if self._closing or self._active_fetches > 0:
+                return
+            if self._crawler is None or now - self._last_used < self.idle_seconds:
+                return
+            crawler = self._crawler
+            self._crawler = None
+        if crawler is not None:
+            try:
+                await crawler.close()
+            except Exception:
+                pass
 
     async def close(self) -> None:
-        await self._close_crawler()
+        async with self._lifecycle:
+            if self._closing:
+                while self._closing:
+                    await self._lifecycle.wait()
+                return
+            self._closing = True
+            try:
+                while self._active_fetches > 0:
+                    await self._lifecycle.wait()
+                crawler = self._crawler
+                self._crawler = None
+            finally:
+                self._closing = False
+                self._lifecycle.notify_all()
+        if crawler is not None:
+            try:
+                await crawler.close()
+            except Exception:
+                pass
+
+    def active_fetch_count(self) -> int:
+        return self._active_fetches
+
+    def last_used(self) -> float:
+        return self._last_used
 
     def is_active(self) -> bool:
         return self._crawler is not None

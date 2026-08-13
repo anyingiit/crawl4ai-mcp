@@ -23,7 +23,6 @@ class StubProvider:
         self.close_log = close_log
         self.reap_log = reap_log
         self.closed = False
-        self.last_used = None
         self.reason = None
 
     async def fetch(self, url):
@@ -47,6 +46,12 @@ class StubProvider:
 
     def is_active(self):
         return False
+
+    def active_fetch_count(self):
+        return 0
+
+    def last_used(self):
+        return 0.0
 
 
 @pytest.fixture
@@ -182,6 +187,8 @@ async def test_diagnose_reports_expected_sections(config):
         assert report["rss_bytes"] > 0
         assert report["providers"]["HTTP"]["ready"] is True
         assert report["browsers"]["HTTP"]["active"] is False
+        assert report["browsers"]["HTTP"]["active_fetches"] == 0
+        assert report["browsers"]["HTTP"]["last_used"] == 0.0
         assert report["recent_failures"] == []
         assert report["domain_policies"] == []
     finally:

@@ -66,6 +66,9 @@ class CamoufoxProvider:
         self._session = None
         self._last_used = 0.0
         self._broken: str | None = None
+        self._lifecycle = asyncio.Condition()
+        self._active_fetches = 0
+        self._closing = False
 
     async def fetch(self, url: str) -> FetchResult:
         started = time.monotonic()
@@ -74,88 +77,128 @@ class CamoufoxProvider:
                 url, self.tier, self.cost_kind, "camoufox disabled", started
             )
         async with self._semaphore:
-            if self._session is None:
-                try:
-                    self._session = await self._launch()
-                except Exception as exc:
-                    self._broken = str(exc)
+            async with self._lifecycle:
+                if self._closing:
                     return failed_result(
-                        url, self.tier, self.cost_kind, str(exc), started
+                        url, self.tier, self.cost_kind, "provider closing", started
                     )
-
-            def fail(exc: Exception, *, network: bool = False) -> FetchResult:
-                network_error = (
-                    "browser_navigation_failed"
-                    if network
-                    and browser_network_error(
-                        exc, operation=FetchStage.NAVIGATION
-                    )
-                    else None
-                )
-                return failed_result(
-                    url, self.tier, self.cost_kind, str(exc), started,
-                    network_error=network_error,
-                )
-
-            context = None
-            try:
-                try:
-                    endpoint = self.egress_proxy.endpoint()
-                    context = await self._session.new_context(
-                        proxy={"server": endpoint.server}
-                    )
-                except Exception as exc:
-                    return fail(exc)
-                try:
-                    await self.request_guard.install(context)
-                except Exception as exc:
-                    return fail(exc)
-                try:
-                    page = await context.new_page()
-                except Exception as exc:
-                    return fail(exc)
-                try:
-                    response = await page.goto(
-                        url, wait_until="domcontentloaded", timeout=60_000
-                    )
-                except Exception as exc:
-                    return fail(exc, network=True)
-                try:
-                    await page.wait_for_load_state("networkidle", timeout=5_000)
-                except Exception:
-                    pass
-                try:
-                    html = await page.content()
-                except Exception as exc:
-                    return fail(exc)
-            finally:
-                if context is not None:
+                if self._session is None:
                     try:
-                        await context.close()
+                        self._session = await self._launch()
+                    except Exception as exc:
+                        self._broken = str(exc)
+                        return failed_result(
+                            url, self.tier, self.cost_kind, str(exc), started
+                        )
+                session = self._session
+                self._active_fetches += 1
+            try:
+                def fail(exc: Exception, *, network: bool = False) -> FetchResult:
+                    network_error = (
+                        "browser_navigation_failed"
+                        if network
+                        and browser_network_error(
+                            exc, operation=FetchStage.NAVIGATION
+                        )
+                        else None
+                    )
+                    return failed_result(
+                        url, self.tier, self.cost_kind, str(exc), started,
+                        network_error=network_error,
+                    )
+
+                context = None
+                try:
+                    try:
+                        endpoint = self.egress_proxy.endpoint()
+                        context = await session.new_context(
+                            proxy={"server": endpoint.server}
+                        )
+                    except Exception as exc:
+                        return fail(exc)
+                    try:
+                        await self.request_guard.install(context)
+                    except Exception as exc:
+                        return fail(exc)
+                    try:
+                        page = await context.new_page()
+                    except Exception as exc:
+                        return fail(exc)
+                    try:
+                        response = await page.goto(
+                            url, wait_until="domcontentloaded", timeout=60_000
+                        )
+                    except Exception as exc:
+                        return fail(exc, network=True)
+                    try:
+                        await page.wait_for_load_state("networkidle", timeout=5_000)
                     except Exception:
                         pass
-            self._last_used = self._clock()
-            return FetchResult(
-                url=url,
-                tier=self.tier,
-                cost_kind=self.cost_kind,
-                status_code=response.status if response is not None else None,
-                html=html,
-                elapsed_ms=int((time.monotonic() - started) * 1000),
-            )
+                    try:
+                        html = await page.content()
+                    except Exception as exc:
+                        return fail(exc)
+                finally:
+                    if context is not None:
+                        try:
+                            await context.close()
+                        except Exception:
+                            pass
+                return FetchResult(
+                    url=url,
+                    tier=self.tier,
+                    cost_kind=self.cost_kind,
+                    status_code=response.status if response is not None else None,
+                    html=html,
+                    elapsed_ms=int((time.monotonic() - started) * 1000),
+                )
+            finally:
+                async with self._lifecycle:
+                    self._active_fetches -= 1
+                    self._last_used = self._clock()
+                    self._lifecycle.notify_all()
 
     async def reap_idle(self, now: float | None = None) -> None:
         now = self._clock() if now is None else now
-        if self._session is not None and now - self._last_used >= self.idle_seconds:
-            await self.close()
-
-    async def close(self) -> None:
-        if self._session is not None:
+        async with self._lifecycle:
+            if self._closing or self._active_fetches > 0:
+                return
+            if self._session is None or now - self._last_used < self.idle_seconds:
+                return
+            session = self._session
+            self._session = None
+        if session is not None:
             try:
-                await self._session.close()
+                await session.close()
             except Exception:
                 pass
-            self._session = None
+
+    async def close(self) -> None:
+        async with self._lifecycle:
+            if self._closing:
+                while self._closing:
+                    await self._lifecycle.wait()
+                return
+            self._closing = True
+            try:
+                while self._active_fetches > 0:
+                    await self._lifecycle.wait()
+                session = self._session
+                self._session = None
+            finally:
+                self._closing = False
+                self._lifecycle.notify_all()
+        if session is not None:
+            try:
+                await session.close()
+            except Exception:
+                pass
+
+    def active_fetch_count(self) -> int:
+        return self._active_fetches
+
+    def last_used(self) -> float:
+        return self._last_used
 
     def is_active(self) -> bool:
         return self._session is not None

@@ -121,6 +121,9 @@ class FakeCrawler:
 
     async def arun(self, url, config=None):
         self.configs.append(config)
+        self.factory.started.set()
+        if url.endswith("/slow") and self.factory.gate is not None:
+            await self.factory.gate.wait()
         return FakeContainer()
 
     async def close(self):
@@ -129,11 +132,13 @@ class FakeCrawler:
 
 
 class FakeCrawlerFactory:
-    def __init__(self):
+    def __init__(self, gate=None):
         self.created = 0
         self.closed = 0
         self.proxies = []
         self.crawlers = []
+        self.started = asyncio.Event()
+        self.gate = gate
 
     def __call__(self, proxy=None):
         self.created += 1
@@ -142,6 +147,118 @@ class FakeCrawlerFactory:
         crawler = FakeCrawler(self, proxy)
         self.crawlers.append(crawler)
         return crawler
+
+
+@pytest.fixture
+def gate():
+    return asyncio.Event()
+
+
+@pytest.fixture
+def clock():
+    return FakeClock()
+
+
+@pytest.fixture
+def provider(gate, clock):
+    factory = FakeCrawlerFactory(gate=gate)
+    p = BrowserProvider(
+        tier=Tier.STEALTH, factory=factory, idle_seconds=180,
+        semaphore=asyncio.Semaphore(2), clock=clock,
+        egress_proxy=FakePinnedProxy(), request_guard=FakeRequestGuard(),
+    )
+    p.factory = factory
+    return p
+
+
+@pytest.mark.asyncio
+async def test_browser_reaper_does_not_close_active_crawler(provider, gate, clock):
+    fetch = asyncio.create_task(provider.fetch("https://example.com/slow"))
+    await provider.factory.started.wait()
+    clock.advance(181)
+    await provider.reap_idle()
+    assert provider.factory.closed == 0
+    gate.set()
+    await fetch
+
+
+@pytest.mark.asyncio
+async def test_browser_close_waits_for_active_fetch_then_closes_once(provider, gate):
+    fetch = asyncio.create_task(provider.fetch("https://example.com/slow"))
+    await provider.factory.started.wait()
+    close = asyncio.create_task(provider.close())
+    await asyncio.sleep(0)
+    assert not close.done()
+    gate.set()
+    await fetch
+    await close
+    assert provider.factory.closed == 1
+
+
+@pytest.mark.asyncio
+async def test_concurrent_first_fetches_create_one_crawler(provider):
+    await asyncio.gather(
+        provider.fetch("https://example.com/a"), provider.fetch("https://example.com/b")
+    )
+    assert provider.factory.created == 1
+
+
+@pytest.mark.asyncio
+async def test_browser_fetch_cancel_decrements_active_count(provider, gate):
+    fetch = asyncio.create_task(provider.fetch("https://example.com/slow"))
+    await provider.factory.started.wait()
+    assert provider.active_fetch_count() == 1
+    fetch.cancel()
+    try:
+        await fetch
+        raise AssertionError("fetch was not cancelled")
+    except asyncio.CancelledError:
+        pass
+    assert provider.active_fetch_count() == 0
+    await provider.close()
+
+
+@pytest.mark.asyncio
+async def test_browser_repeated_close_is_idempotent(provider, gate):
+    fetch = asyncio.create_task(provider.fetch("https://example.com/slow"))
+    await provider.factory.started.wait()
+    gate.set()
+    await fetch
+    await provider.close()
+    await provider.close()
+    assert provider.factory.closed == 1
+
+
+@pytest.mark.asyncio
+async def test_browser_concurrent_closes_do_not_deadlock(provider, gate):
+    fetch = asyncio.create_task(provider.fetch("https://example.com/slow"))
+    await provider.factory.started.wait()
+    first = asyncio.create_task(provider.close())
+    second = asyncio.create_task(provider.close())
+    await asyncio.sleep(0)
+    assert not first.done()
+    assert not second.done()
+    gate.set()
+    await fetch
+    await asyncio.wait_for(asyncio.gather(first, second), timeout=5)
+    assert provider.factory.closed == 1
+
+
+@pytest.mark.asyncio
+async def test_browser_lifecycle_methods_report_activity(provider, gate, clock):
+    fetch = asyncio.create_task(provider.fetch("https://example.com/slow"))
+    await provider.factory.started.wait()
+    assert provider.is_active() is True
+    assert provider.active_fetch_count() == 1
+    clock.advance(181)
+    await provider.reap_idle()
+    assert provider.factory.closed == 0
+    gate.set()
+    await fetch
+    assert provider.active_fetch_count() == 0
+    assert provider.last_used() == clock.now
+    await provider.close()
+    assert provider.is_active() is False
 
 
 @pytest.mark.asyncio
