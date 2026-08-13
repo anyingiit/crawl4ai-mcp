@@ -66,9 +66,11 @@ cp .env.example .env && chmod 600 .env      # 填入密钥（见 .env.example）
 ## 出口安全（egress）
 
 - 只允许 `http/https` 公共地址：私网、回环（127.0.0.1 等）、链路本地、文档段（TEST-NET）一律 `non_global_address` 拒绝；`file://` 等非 HTTP scheme 直接 `unsupported_scheme` 拒绝；含 userinfo、非常规端口、IPv6 zone id、控制字符的 URL 同样拒绝
-- 域名每次请求都做全量 DNS 解析并逐地址校验（防 DNS rebinding）；HTTP 层用 `CurlOpt.RESOLVE` 把解析结果钉住再发包，重定向逐跳重新解析校验（curl 关闭自动跳转，手动跟随并复核）
-- 浏览器子资源（`**/*`）与 crawl4ai seeder 流量同样走 URL 策略，非公共地址一律 abort
+- 域名每次请求都做全量 DNS 解析并逐地址校验（防 DNS rebinding）；HTTP 层用 `CurlOpt.RESOLVE` 把解析结果钉住再发包，重定向逐跳重新解析校验（curl 关闭自动跳转，手动跟随并复核），每一跳实际请求的是规范化后的 URL（尾点主机名无法绕过 pin）
+- 浏览器子资源（`**/*`）与 crawl4ai seeder 流量同样走 URL 策略，非公共地址一律 abort；被拦截的主框架导航由浏览器层上报 `policy_error`，不会误报为普通失败
 - 同源判断比较规范化后的 scheme/host/有效端口；重定向逃逸同源范围即拒绝
+- 本地 pinning 代理对客户端只返回固定公开原因短语（`403 blocked by policy` / `502 tunnel failed`），不反射被拒 URL、凭据或内部 socket/DNS 异常文本
+- 上游代理配置只接受 `http/https`，URL 内不得携带 userinfo/path/query/fragment（凭据走显式字段），非法端口与缺失主机直接拒绝
 
 ## 提供商模型与失败语义
 
@@ -83,7 +85,9 @@ cp .env.example .env && chmod 600 .env      # 填入密钥（见 .env.example）
 
 - 七个层级名一律小写字符串：`http` / `stealth` / `undetected` / `camoufox` / `proxy` / `rayobyte` / `firecrawl`
 - `scrape` 返回 `{url, status, content, tier_used, cost_kind, elapsed_ms, attempts, cooldown_until, error}`，`format` 仅 `markdown`（默认）或 `html`（仅成功时返回原始 HTML，失败置空）
-- `crawl` 返回 `{pages, stats}`；`map` 返回 `{urls}`（limit 1..100，超出拒绝）；`diagnose` 返回 `{rss_bytes, providers, browsers, recent_failures, domain_policies}`
+- `crawl` 返回 `{pages, stats}`：同源重定向后 `pages[].url` 报告规范化后的最终地址（`effective_url`），跨源逃逸时保持请求别名；同源重定向别名直接去重，绝不二次抓取（避免重复付费）
+- `map` 返回 `{urls}`（limit 1..100，超出拒绝），条目经完整规范化同源校验（scheme/port/凭据/非 HTTP 一律剔除）
+- `diagnose(domain)` 接受裸主机名（`example.com`）或完整 URL；私网/回环字面量与非法主机名拒绝
 - 恰好四个工具：`scrape` / `crawl` / `map` / `diagnose`；raw HTML 始终内部持有，除非显式请求 html 格式
 
 ## 测试

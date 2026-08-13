@@ -65,7 +65,9 @@ systemctl --user show crawl4ai-mcp.service -p MemoryPeak
 ## 3. 出口安全（egress）
 
 - 只允许 `http/https` 公共地址：私网、回环、链路本地、文档段等一律拒绝（`non_global_address`）；`file://` 等非 HTTP scheme 拒绝（`unsupported_scheme`）；userinfo、非常规端口、IPv6 zone id、控制字符同样拒绝
-- 域名每请求全量解析并逐地址校验；HTTP 层 `CurlOpt.RESOLVE` 钉住解析结果，curl 关闭自动跳转，重定向逐跳重新解析复核；浏览器子资源与 seeder 流量同策略，非公共地址 abort
+- 域名每请求全量解析并逐地址校验；HTTP 层 `CurlOpt.RESOLVE` 钉住解析结果，curl 关闭自动跳转，重定向逐跳重新解析复核；每一跳实际请求规范化后的 URL（尾点主机名无法绕过 pin）；浏览器子资源与 seeder 流量同策略，非公共地址 abort
+- 被拦截的主框架导航在浏览器层归一化为 `policy_error`；本地 pinning 代理只回固定公开原因（`403 blocked by policy` / `502 tunnel failed`），不反射 URL/凭据/内部异常文本
+- 上游代理配置仅接受 `http/https`，URL 不得含 userinfo/path/query/fragment（凭据走显式字段），非法端口与缺失主机直接报错
 - 同源 = 规范化 scheme/host/有效端口 比较，重定向逃逸即拒绝
 
 ## 4. 提供商模型与失败语义
@@ -95,7 +97,7 @@ systemctl --user show crawl4ai-mcp.service -p MemoryPeak
 
 ## 5. 域名策略检查与清理
 
-`diagnose` MCP 工具返回 `domain_policies`、`recent_failures`、`providers` 可用性与 `browsers` 状态。清理某个域名的记忆需停止服务后直接操作 SQLite：
+`diagnose` MCP 工具返回 `domain_policies`、`recent_failures`、`providers` 可用性与 `browsers` 状态；`domain` 参数接受裸主机名（`example.com`，规范化后匹配）或完整 URL，私网/回环字面量与非法主机名会直接报错。清理某个域名的记忆需停止服务后直接操作 SQLite：
 
 ```bash
 systemctl --user stop crawl4ai-mcp.service
@@ -158,7 +160,7 @@ systemctl --user restart crawl4ai-mcp.service
 
 `attempts` 数组按顺序记录了每一层尝试的 `tier`（小写层级名）、`decision`、`cost_kind`、`target_status_code`、`provider_status_code`、`provider_error_kind`、`provider_error`、`error`。`diagnose` 的 `recent_failures` 保留了最近失败的 URL 与耗时。
 
-响应契约：`scrape` → `{url, status, content, tier_used, cost_kind, elapsed_ms, attempts, cooldown_until, error}`（`format` 仅 `markdown`/`html`，`html` 仅成功时返回原始 HTML）；`crawl` → `{pages, stats}`；`map` → `{urls}`（limit 1..100）；`diagnose` → `{rss_bytes, providers, browsers, recent_failures, domain_policies}`。层级名一律小写字符串。
+响应契约：`scrape` → `{url, status, content, tier_used, cost_kind, elapsed_ms, attempts, cooldown_until, error}`（`format` 仅 `markdown`/`html`，`html` 仅成功时返回原始 HTML）；`crawl` → `{pages, stats}`（同源重定向的页面报告规范化最终地址，同源重定向别名去重不二次抓取，跨源逃逸保持请求别名）；`map` → `{urls}`（limit 1..100，条目经完整规范化同源校验）；`diagnose(domain)` → `{rss_bytes, providers, browsers, recent_failures, domain_policies}`（domain 接受裸主机名或 URL）。层级名一律小写字符串。
 
 ## 9. 提供商额度耗尽
 
