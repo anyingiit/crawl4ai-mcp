@@ -80,6 +80,7 @@ class HttpProvider:
                         started,
                         policy_error=exc.reason.value,
                     )
+                current = target.url.url
                 pinned = [
                     f"{target.host}:{target.port}:{address}"
                     for address in target.addresses
@@ -87,7 +88,9 @@ class HttpProvider:
                 session = None
                 try:
                     session = await self._open_session(pinned)
-                    response = await session.get(current, headers=BROWSER_HEADERS)
+                    response = await session.get(
+                        target.url.url, headers=BROWSER_HEADERS
+                    )
                 except Exception as exc:
                     return failed_result(
                         url,
@@ -112,7 +115,7 @@ class HttpProvider:
                         for key, value in response.headers.items()
                         if key.lower() == "location"
                     )
-                    current = urljoin(current, location)
+                    current = urljoin(target.url.url, location)
                     hops += 1
                     continue
                 return FetchResult(
@@ -122,7 +125,7 @@ class HttpProvider:
                     target_status_code=response.status_code,
                     html=response.text,
                     headers=dict(response.headers),
-                    redirected_url=current if current != url else None,
+                    redirected_url=current if hops > 0 else None,
                     elapsed_ms=int((time.monotonic() - started) * 1000),
                 )
 

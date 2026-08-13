@@ -56,8 +56,10 @@ class FakeSession:
         self.factory = factory
         self.kwargs = kwargs
         self.closed = False
+        self.requested = []
 
     async def get(self, url, headers=None):
+        self.requested.append(url)
         response = self.factory.responses.pop(0)
         response.url = response.url or url
         return response
@@ -147,6 +149,35 @@ async def test_http_provider_stops_with_too_many_redirects_after_max_hops():
     assert result.network_error == "too_many_redirects"
     assert result.target_status_code is None
     assert len(factory.sessions) == 10
+
+
+@pytest.mark.asyncio
+async def test_trailing_dot_authority_fetches_normalized_url_with_pin():
+    factory = FakeSessionFactory([FakeResponse(status_code=200)])
+    provider = HttpProvider(public_policy("93.184.216.34"), session_factory=factory)
+    result = await provider.fetch("https://example.com.:443/start?q=1#frag")
+    assert factory.sessions[0].kwargs["curl_options"][CurlOpt.RESOLVE] == [
+        "example.com:443:93.184.216.34"
+    ]
+    assert factory.sessions[0].requested == ["https://example.com/start?q=1"]
+    assert result.target_status_code == 200
+    assert result.redirected_url is None
+
+
+@pytest.mark.asyncio
+async def test_trailing_dot_redirect_hops_fetch_normalized_urls():
+    factory = FakeSessionFactory([
+        FakeResponse(302, headers={"location": "https://www.example.net./final"}),
+        FakeResponse(200),
+    ])
+    provider = HttpProvider(two_host_public_policy(), session_factory=factory)
+    result = await provider.fetch("https://example.com./start")
+    assert factory.sessions[0].requested == ["https://example.com/start"]
+    assert factory.sessions[1].kwargs["curl_options"][CurlOpt.RESOLVE] == [
+        "www.example.net:443:93.184.216.35"
+    ]
+    assert factory.sessions[1].requested == ["https://www.example.net/final"]
+    assert result.redirected_url == "https://www.example.net/final"
 
 
 class _Handler:
