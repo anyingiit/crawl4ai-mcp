@@ -8,7 +8,7 @@ from urllib.parse import unquote, urlsplit
 import psutil
 from crawl4ai.async_configs import ProxyConfig
 
-from crawl4ai_mcp.cascade import CascadeEngine
+from crawl4ai_mcp.cascade import CascadeEngine, CascadeInputError
 from crawl4ai_mcp.config import AppConfig
 from crawl4ai_mcp.discovery import crawl_site, map_urls
 from crawl4ai_mcp.egress import (
@@ -190,15 +190,22 @@ class CrawlService:
     ) -> dict:
         maximum = parse_tier(max_tier) if max_tier else Tier.FIRECRAWL
         force = parse_tier(force_tier)
-        result = await self.engine.scrape(url, maximum=maximum, force=force)
-        payload = result.model_dump(mode="json")
-        if result.status == "failed":
+        if force is not None and force > maximum:
+            raise CascadeInputError(
+                f"force tier {force.name} exceeds maximum tier {maximum.name}"
+            )
+        if self._url_policy is not None:
+            await self._url_policy.resolve(url)
+        outcome = await self.engine.scrape(url, maximum=maximum, force=force)
+        response = outcome.response
+        payload = response.model_dump(mode="json")
+        if response.status == "failed":
             self._recent_failures.appendleft(
                 {
                     "url": url,
                     "time": int(time.time()),
-                    "error": result.error,
-                    "attempts": [attempt.tier.value for attempt in result.attempts],
+                    "error": response.error,
+                    "attempts": [attempt.tier for attempt in response.attempts],
                 }
             )
         return payload
@@ -217,7 +224,7 @@ class CrawlService:
             include_pattern=include_pattern,
             engine=self.engine,
         )
-        return [result.model_dump(mode="json") for result in results]
+        return [result.response.model_dump(mode="json") for result in results]
 
     async def map(
         self, url: str, search: str | None = None, limit: int = 100

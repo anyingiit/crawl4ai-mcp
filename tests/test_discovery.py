@@ -333,7 +333,7 @@ async def test_crawl_site_bfs_dedup_origin_and_cycle(policy_store):
     engine = make_site_engine(SITE, calls)
     engine.policy = policy_store
     results = await crawl_site("http://localhost:9000/", engine=engine, max_pages=10, max_depth=2)
-    scraped = [result.url for result in results]
+    scraped = [result.response.url for result in results]
     assert scraped == [
         "http://localhost:9000/",
         "http://localhost:9000/a",
@@ -349,12 +349,12 @@ async def test_crawl_site_respects_max_pages_and_max_depth(policy_store):
     engine = make_site_engine(SITE, calls)
     engine.policy = policy_store
     results = await crawl_site("http://localhost:9000/", engine=engine, max_pages=2, max_depth=5)
-    assert [r.url for r in results] == ["http://localhost:9000/", "http://localhost:9000/a"]
+    assert [r.response.url for r in results] == ["http://localhost:9000/", "http://localhost:9000/a"]
     calls = []
     engine2 = make_site_engine(SITE, calls)
     engine2.policy = policy_store
     results = await crawl_site("http://localhost:9000/", engine=engine2, max_pages=10, max_depth=1)
-    assert [r.url for r in results] == ["http://localhost:9000/", "http://localhost:9000/a", "http://localhost:9000/b"]
+    assert [r.response.url for r in results] == ["http://localhost:9000/", "http://localhost:9000/a", "http://localhost:9000/b"]
 
 
 @pytest.mark.asyncio
@@ -376,10 +376,10 @@ async def test_crawl_site_first_success_sets_tier_for_rest(policy_store):
     )
     engine.policy = policy_store
     results = await crawl_site("http://localhost:9000/", engine=engine, max_pages=10, max_depth=2)
-    assert results[0].tier_used == Tier.STEALTH
+    assert results[0].response.tier_used == "stealth"
     first_page_calls = list(calls)
     assert first_page_calls[:2] == [Tier.HTTP, Tier.STEALTH]
     calls.clear()
     results = await crawl_site("http://localhost:9000/b", engine=engine, max_pages=2, max_depth=1)
     assert calls[0] == Tier.STEALTH
-    assert results[0].tier_used == Tier.STEALTH
+    assert results[0].response.tier_used == "stealth"

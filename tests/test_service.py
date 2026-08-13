@@ -1,9 +1,19 @@
 import asyncio
+import ipaddress
+
 import pytest
 
 from crawl4ai_mcp.config import AppConfig
+from crawl4ai_mcp.egress import UrlPolicy, UrlPolicyError, UrlPolicyReason
 from crawl4ai_mcp.models import CostKind, FetchResult, ProviderAvailability, Tier
 from crawl4ai_mcp.service import CrawlService
+
+
+def public_policy(address: str = "93.184.216.34") -> UrlPolicy:
+    async def resolver(_host: str, _port: int):
+        return [ipaddress.ip_address(address)]
+
+    return UrlPolicy(resolver)
 
 
 class StubProvider:
@@ -121,16 +131,44 @@ async def test_service_shares_one_url_policy_egress_proxy_and_guard(config):
 async def test_scrape_success_returns_structured_result(config):
     providers = {Tier.HTTP: StubProvider(Tier.HTTP)}
     service = await make_service(config, providers=providers)
+    service._url_policy = public_policy()
     try:
         payload = await service.scrape("https://example.com")
         assert payload["status"] == "success"
-        assert payload["tier_used"] == 0
+        assert payload["tier_used"] == "http"
         assert payload["cost_kind"] == "free"
         assert isinstance(payload["elapsed_ms"], int)
         assert payload["content"] == "# Ok"
         assert len(payload["attempts"]) == 1
         assert payload["attempts"][0]["decision"] == "success"
         assert list(service._recent_failures) == []
+    finally:
+        await service.close()
+
+
+@pytest.mark.asyncio
+async def test_service_rejects_private_url_before_policy_lookup(config):
+    class BoomEngine:
+        def __init__(self):
+            self.calls = []
+
+        async def scrape(self, url, maximum=Tier.FIRECRAWL, force=None):
+            self.calls.append(url)
+            raise AssertionError("engine must not run for rejected url")
+
+    engine = BoomEngine()
+    service = CrawlService(
+        config,
+        providers={Tier.HTTP: StubProvider(Tier.HTTP)},
+        engine=engine,
+    )
+    await service.start()
+    try:
+        with pytest.raises(UrlPolicyError) as exc:
+            await service.scrape("http://127.0.0.1/")
+        assert exc.value.reason == UrlPolicyReason.NON_GLOBAL_ADDRESS
+        assert engine.calls == []
+        assert await service.policy.list_policies() == []
     finally:
         await service.close()
 

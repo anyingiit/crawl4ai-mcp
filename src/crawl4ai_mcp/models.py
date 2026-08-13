@@ -28,7 +28,9 @@ class Decision(StrEnum):
     CLOUDFLARE = "cloudflare"
     RATE_LIMITED = "rate_limited"
     TERMINAL = "terminal"
-    RETRYABLE_NETWORK = "retryable_network"
+    TARGET_NETWORK = "target_network"
+    PROVIDER_FAILURE = "provider_failure"
+    POLICY_REJECTED = "policy_rejected"
     FAILED = "failed"
 
 

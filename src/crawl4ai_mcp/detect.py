@@ -12,27 +12,41 @@ CLOUDFLARE_MARKERS = (
 
 
 def classify(result: FetchResult, visible_text_threshold: int = 200) -> Decision:
-    if result.status_code in TERMINAL_STATUSES:
+    if result.policy_error:
+        return Decision.POLICY_REJECTED
+    if result.network_error or (
+        result.error
+        and result.target_status_code is None
+        and result.provider_status_code is None
+    ):
+        return Decision.TARGET_NETWORK
+    if result.provider_status_code is not None and result.target_status_code is None:
+        return Decision.PROVIDER_FAILURE
+    if result.target_status_code in TERMINAL_STATUSES:
         return Decision.TERMINAL
     haystack = f"{result.html}\n{result.headers}".lower()
     if any(marker in haystack for marker in CLOUDFLARE_MARKERS):
         return Decision.CLOUDFLARE
-    if result.status_code in {429, 503} and "retry-after" in {
+    if result.target_status_code in {429, 503} and "retry-after" in {
         key.lower() for key in result.headers
     }:
         return Decision.RATE_LIMITED
-    if result.error and result.status_code is None:
-        return Decision.RETRYABLE_NETWORK
     text = BeautifulSoup(result.html, "lxml").get_text(" ", strip=True)
-    if result.status_code == 200 and len(text) >= visible_text_threshold:
+    if result.target_status_code == 200 and len(text) >= visible_text_threshold:
         return Decision.SUCCESS
-    if result.status_code == 200 and len(text) < visible_text_threshold:
+    if result.target_status_code == 200 and len(text) < visible_text_threshold:
         return Decision.NEEDS_JS if "<script" in result.html.lower() else Decision.SHORT_STATIC
     return Decision.FAILED
 
 
 def next_tiers(current: Tier, decision: Decision, maximum: Tier) -> list[Tier]:
-    if decision in {Decision.SUCCESS, Decision.SHORT_STATIC, Decision.TERMINAL}:
+    if decision in {
+        Decision.SUCCESS,
+        Decision.SHORT_STATIC,
+        Decision.TERMINAL,
+        Decision.TARGET_NETWORK,
+        Decision.POLICY_REJECTED,
+    }:
         return []
     skip_proxy = decision == Decision.CLOUDFLARE
     if decision == Decision.RATE_LIMITED:

@@ -10,7 +10,7 @@ from bs4 import BeautifulSoup
 from crawl4ai.async_url_seeder import COLLINFO_URL, AsyncUrlSeeder
 
 from crawl4ai_mcp.egress import PinnedEgressProxy, UrlPolicy
-from crawl4ai_mcp.models import ScrapeResult, Tier
+from crawl4ai_mcp.models import ScrapeOutcome, Tier
 
 MAX_MAP_URLS = 100
 MAX_CRAWL_PAGES = 100
@@ -183,7 +183,7 @@ async def crawl_site(
     max_depth: int = 2,
     include_pattern: str | None = None,
     engine=None,
-) -> list[ScrapeResult]:
+) -> list[ScrapeOutcome]:
     if not 1 <= max_pages <= MAX_CRAWL_PAGES:
         raise ValueError(f"max_pages must be between 1 and {MAX_CRAWL_PAGES}")
     if not 1 <= max_depth <= MAX_CRAWL_DEPTH:
@@ -192,7 +192,7 @@ async def crawl_site(
     origin = _hostname(url)
     queue: deque[tuple[str, int]] = deque([(url, 0)])
     visited: set[str] = set()
-    results: list[ScrapeResult] = []
+    results: list[ScrapeOutcome] = []
     while queue and len(results) < max_pages:
         page_url, depth = queue.popleft()
         if page_url in visited:
@@ -200,7 +200,7 @@ async def crawl_site(
         visited.add(page_url)
         result = await engine.scrape(page_url)
         results.append(result)
-        if depth >= max_depth or result.status != "success":
+        if depth >= max_depth or result.response.status != "success":
             continue
         html = await _page_html(engine, page_url)
         for link in extract_links(html, page_url, origin, include_pattern):
