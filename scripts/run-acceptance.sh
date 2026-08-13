@@ -14,6 +14,12 @@
 # not certified: the script exits 3 and prints "acceptance incomplete"
 # instead of claiming success.
 #
+# The verdict is delegated to scripts/acceptance_account.py, which combines
+# the pytest exit status with the JUnit counts. A nonzero pytest status
+# (interrupted, internal error, no tests collected) or a junit with zero
+# tests can never produce exit 0; missing evidence exits 2 when pytest
+# reported success.
+#
 # Evidence is persisted as JUnit XML plus a run log under
 # $ACCEPTANCE_ARTIFACT_DIR (default: .superpowers/sdd/acceptance, which is
 # git-ignored by the SDD directory's own .gitignore).
@@ -54,41 +60,11 @@ if [[ "$PYTEST_STATUS" -ne 0 ]]; then
   echo "pytest exited with status $PYTEST_STATUS" | tee -a "$LOG"
 fi
 
-if [[ ! -f "$JUNIT" ]]; then
-  echo "run-acceptance.sh: no JUnit XML produced; acceptance cannot be judged" | tee -a "$LOG"
-  exit 2
-fi
+set +e
+"$PYTHON" "$ROOT/scripts/acceptance_account.py" "$JUNIT" "$PYTEST_STATUS" \
+  2>&1 | tee -a "$LOG"
+ACCOUNT_STATUS=${PIPESTATUS[0]}
+set -e
 
-read -r TESTS FAILURES ERRORS SKIPPED <<< "$(
-  "$PYTHON" - "$JUNIT" <<'PY'
-import sys
-import xml.etree.ElementTree as ET
-
-root = ET.parse(sys.argv[1]).getroot()
-tests = failures = errors = skipped = 0
-for suite in root.iter("testsuite"):
-    tests += int(suite.get("tests", 0))
-    failures += int(suite.get("failures", 0))
-    errors += int(suite.get("errors", 0))
-    skipped += int(suite.get("skipped", 0))
-print(tests, failures, errors, skipped)
-PY
-)"
-
-echo "tests=$TESTS failures=$FAILURES errors=$ERRORS skipped=$SKIPPED" | tee -a "$LOG"
-
-if [[ "$FAILURES" -gt 0 || "$ERRORS" -gt 0 ]]; then
-  echo "acceptance failed: $FAILURES failure(s), $ERRORS error(s)" | tee -a "$LOG"
-  echo "junit=$JUNIT" | tee -a "$LOG"
-  exit 1
-fi
-
-if [[ "$SKIPPED" -gt 0 ]]; then
-  echo "acceptance incomplete: $SKIPPED criterion/criteria skipped" | tee -a "$LOG"
-  echo "junit=$JUNIT" | tee -a "$LOG"
-  exit 3
-fi
-
-echo "acceptance complete" | tee -a "$LOG"
 echo "junit=$JUNIT" | tee -a "$LOG"
-exit 0
+exit "$ACCOUNT_STATUS"

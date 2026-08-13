@@ -19,6 +19,8 @@ CRAWL4AI_MCP_LIVE_TESTS=1 scripts/run-acceptance.sh
 
 规则：`acceptance_required` 用例（Tier 0-2、安全拒绝、付费层不可达、Cloudflare 跳过、404、记忆层、冷却、资源生命周期、opencode 发现与调用）必须通过；`acceptance_optional` 用例（Camoufox/代理/Rayobyte/Firecrawl）只有在**禁用或未配置**时才允许跳过——已配置的提供商失败就是验收失败，不再有额度耗尽类跳过。任何跳过都会让脚本以 3 退出，明确区分「完整通过」与「部分验收」。
 
+「禁用/未配置」由部署配置判定：验收的 service fixture 与运行中的服务共用同一份 `config.toml` 与 `.env`（仅策略库换成临时库）。因此 `enabled_tiers` 中不包含的层按「故意禁用」跳过（即使 `.env` 仍配置了密钥）；启用且已配置但不可用或失败的层一律判失败。判定逻辑不依赖网络：pytest 退出状态异常（中断/内部错误/零用例）或 JUnit 中 `tests==0` 时脚本必定以 1 退出，绝不误报成功；无 JUnit 证据时以 2 退出。
+
 前置：`crawl4ai-mcp.service` 已部署运行、opencode 配置含 crawl4ai 远程入口（见 §8）、需要付费层时 `.env` 已配置对应密钥。
 
 ## 1. 服务状态、日志与启停

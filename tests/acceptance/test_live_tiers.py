@@ -4,16 +4,21 @@ Run with: CRAWL4AI_MCP_LIVE_TESTS=1 scripts/run-acceptance.sh
 (or: CRAWL4AI_MCP_LIVE_TESTS=1 .venv/bin/pytest tests/acceptance -v)
 
 Every test uses a fresh temporary policy database so domain memory from
-earlier runs cannot mask a failure.
+earlier runs cannot mask a failure. The service fixture loads the same
+deployment config (config.toml) and environment (.env) as the systemd unit,
+overriding only the database path, so `enabled_tiers` in the deployment
+config governs which tiers acceptance exercises.
 
 Skip policy (acceptance markers):
 - acceptance_required tests must pass; a skip here means incomplete acceptance.
 - Camoufox, the datacenter proxy tier, Rayobyte, and Firecrawl are
-  acceptance_optional and skip ONLY when disabled or unconfigured. When
-  enabled/configured they must assert availability.ready, a successful
-  fetch, the exact tier, the exact cost kind, and the target marker.
-  Credit-exhaustion and proxied-fetch-failure skips are intentionally
-  absent: a configured provider that fails is an acceptance failure.
+  acceptance_optional and skip ONLY when intentionally disabled (not in
+  config enabled_tiers / provider disabled) or unconfigured (no credentials
+  or proxies). When enabled/configured they must assert availability.ready,
+  a successful fetch, the exact tier, the exact cost kind, and the target
+  marker. Credit-exhaustion and proxied-fetch-failure skips are
+  intentionally absent: a configured provider that fails is an acceptance
+  failure.
 """
 
 import os
@@ -25,9 +30,14 @@ import pytest
 from dotenv import dotenv_values
 from fastmcp import Client
 
-from crawl4ai_mcp.config import AppConfig
+from crawl4ai_mcp.config import load_config
 from crawl4ai_mcp.models import Tier
 from crawl4ai_mcp.service import CrawlService
+
+from acceptance_helpers import (
+    assert_configured_provider_success,
+    configured_provider_skip_reason,
+)
 
 LIVE = os.environ.get("CRAWL4AI_MCP_LIVE_TESTS") == "1"
 
@@ -38,25 +48,17 @@ pytestmark = [
 
 ROOT = Path(__file__).resolve().parents[2]
 TARGETS = tomllib.loads((ROOT / "tests" / "acceptance" / "targets.toml").read_text())
-ENV = dotenv_values(ROOT / ".env")
 
 SERVICE_URL = "http://127.0.0.1:11236/mcp"
 
 
 @pytest.fixture
 async def service(tmp_path):
-    config = AppConfig(
-        database_path=tmp_path / "policy.db",
-        webshare_proxies=[
-            p for p in (ENV.get("WEBSHARE_PROXIES") or "").split(",") if p
-        ],
-        oxylabs_proxies=[
-            p for p in (ENV.get("OXYLABS_PROXIES") or "").split(",") if p
-        ],
-        rayobyte_api_url=ENV.get("RAYOBYTE_API_URL"),
-        rayobyte_api_key=ENV.get("RAYOBYTE_API_KEY"),
-        firecrawl_api_key=ENV.get("FIRECRAWL_API_KEY"),
+    config = load_config(
+        ROOT / "config.toml",
+        env=dotenv_values(ROOT / ".env"),
     )
+    config = config.model_copy(update={"database_path": tmp_path / "policy.db"})
     svc = CrawlService(config)
     await svc.start()
     yield svc
@@ -107,29 +109,32 @@ async def test_tier2_forced_undetected(service):
 @pytest.mark.acceptance_optional
 @pytest.mark.asyncio
 async def test_tier3_camoufox_when_configured(service):
-    provider = service.providers[Tier.CAMOUFOX]
-    availability = provider.availability()
-    if not availability.enabled:
-        pytest.skip(f"camoufox disabled: {availability.reason}")
-    assert availability.ready, f"camoufox enabled but unavailable: {availability.reason}"
+    tier = Tier.CAMOUFOX
+    provider = service.providers.get(tier)
+    reason = configured_provider_skip_reason(
+        provider, tier, service.config.enabled_tiers
+    )
+    if reason is not None:
+        pytest.skip(reason)
+    assert provider.availability().ready, f"{tier.name.lower()} configured but unavailable"
     target = TARGETS["js_quotes"]
     result = await service.scrape(
         target["url"], max_tier="camoufox", force_tier="camoufox"
     )
-    assert result["status"] == "success", result.get("error")
-    assert result["tier_used"] == Tier.CAMOUFOX.name.lower()
-    assert result["cost_kind"] == "free"
-    assert target["marker"] in result["content"]
+    assert_configured_provider_success(result, tier, "free", target["marker"])
 
 
 @pytest.mark.acceptance_optional
 @pytest.mark.asyncio
 async def test_tier4_proxy_when_configured(service):
-    provider = service.providers[Tier.PROXY]
-    availability = provider.availability()
-    if not availability.ready:
-        pytest.skip(f"proxy tier unconfigured: {availability.reason}")
-    assert availability.ready, f"proxy tier enabled but unavailable: {availability.reason}"
+    tier = Tier.PROXY
+    provider = service.providers.get(tier)
+    reason = configured_provider_skip_reason(
+        provider, tier, service.config.enabled_tiers
+    )
+    if reason is not None:
+        pytest.skip(reason)
+    assert provider.availability().ready, f"{tier.name.lower()} configured but unavailable"
     target = TARGETS["proxy_ip_check"]
     direct = await service.scrape(
         target["url"], max_tier="http", force_tier="http"
@@ -138,11 +143,9 @@ async def test_tier4_proxy_when_configured(service):
         target["url"], max_tier="proxy", force_tier="proxy"
     )
     assert direct["status"] == "success", direct.get("error")
-    assert proxied["status"] == "success", proxied.get("error")
-    assert proxied["tier_used"] == Tier.PROXY.name.lower()
-    assert proxied["cost_kind"] == "proxy_bandwidth"
-    assert re.search(target["marker"], direct["content"]), "direct IP body malformed"
-    assert re.search(target["marker"], proxied["content"]), "proxied IP body malformed"
+    assert_configured_provider_success(
+        proxied, tier, "proxy_bandwidth", target["marker"], marker_is_regex=True
+    )
 
     def extract_ip(content):
         match = re.search(r'"ip"\s*:\s*"([^"]+)"', content)
@@ -157,35 +160,35 @@ async def test_tier4_proxy_when_configured(service):
 @pytest.mark.acceptance_optional
 @pytest.mark.asyncio
 async def test_tier5_rayobyte_when_configured(service):
-    provider = service.providers[Tier.RAYOBYTE]
-    availability = provider.availability()
-    if not availability.ready:
-        pytest.skip(f"rayobyte unconfigured: {availability.reason}")
-    assert availability.ready, f"rayobyte configured but unavailable: {availability.reason}"
+    tier = Tier.RAYOBYTE
+    provider = service.providers.get(tier)
+    reason = configured_provider_skip_reason(
+        provider, tier, service.config.enabled_tiers
+    )
+    if reason is not None:
+        pytest.skip(reason)
+    assert provider.availability().ready, f"{tier.name.lower()} configured but unavailable"
     result = await service.scrape(
         "https://example.com/", max_tier="rayobyte", force_tier="rayobyte"
     )
-    assert result["status"] == "success", result.get("error")
-    assert result["tier_used"] == Tier.RAYOBYTE.name.lower()
-    assert result["cost_kind"] == "rayobyte_credit"
-    assert "Example Domain" in result["content"]
+    assert_configured_provider_success(result, tier, "rayobyte_credit", "Example Domain")
 
 
 @pytest.mark.acceptance_optional
 @pytest.mark.asyncio
 async def test_tier6_firecrawl_when_configured(service):
-    provider = service.providers[Tier.FIRECRAWL]
-    availability = provider.availability()
-    if not availability.ready:
-        pytest.skip(f"firecrawl unconfigured: {availability.reason}")
-    assert availability.ready, f"firecrawl configured but unavailable: {availability.reason}"
+    tier = Tier.FIRECRAWL
+    provider = service.providers.get(tier)
+    reason = configured_provider_skip_reason(
+        provider, tier, service.config.enabled_tiers
+    )
+    if reason is not None:
+        pytest.skip(reason)
+    assert provider.availability().ready, f"{tier.name.lower()} configured but unavailable"
     result = await service.scrape(
         "https://example.com/", max_tier="firecrawl", force_tier="firecrawl"
     )
-    assert result["status"] == "success", result.get("error")
-    assert result["tier_used"] == Tier.FIRECRAWL.name.lower()
-    assert result["cost_kind"] == "firecrawl_credit"
-    assert "Example Domain" in result["content"]
+    assert_configured_provider_success(result, tier, "firecrawl_credit", "Example Domain")
 
 
 @pytest.mark.acceptance_required
