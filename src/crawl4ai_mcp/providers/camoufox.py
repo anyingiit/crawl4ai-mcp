@@ -69,6 +69,7 @@ class CamoufoxProvider:
         self._lifecycle = asyncio.Condition()
         self._active_fetches = 0
         self._closing = False
+        self._close_task: asyncio.Task | None = None
 
     async def fetch(self, url: str) -> FetchResult:
         started = time.monotonic()
@@ -175,24 +176,31 @@ class CamoufoxProvider:
 
     async def close(self) -> None:
         async with self._lifecycle:
-            if self._closing:
-                while self._closing:
-                    await self._lifecycle.wait()
-                return
-            self._closing = True
-            try:
+            if self._close_task is not None:
+                task = self._close_task
+            else:
+                self._closing = True
+                task = asyncio.create_task(self._close_resource())
+                self._close_task = task
+        await asyncio.shield(task)
+
+    async def _close_resource(self) -> None:
+        try:
+            async with self._lifecycle:
                 while self._active_fetches > 0:
                     await self._lifecycle.wait()
                 session = self._session
                 self._session = None
-            finally:
+            if session is not None:
+                try:
+                    await session.close()
+                except Exception:
+                    pass
+        finally:
+            async with self._lifecycle:
                 self._closing = False
+                self._close_task = None
                 self._lifecycle.notify_all()
-        if session is not None:
-            try:
-                await session.close()
-            except Exception:
-                pass
 
     def active_fetch_count(self) -> int:
         return self._active_fetches

@@ -87,31 +87,37 @@ class FakeBrowser:
 
 
 class FakeSession:
-    def __init__(self, browser):
+    def __init__(self, browser, launcher):
         self.browser = browser
+        self.launcher = launcher
         self.closed = False
 
     async def new_context(self, **kwargs):
         return await self.browser.new_context(**kwargs)
 
     async def close(self):
+        self.launcher.close_started.set()
+        if self.launcher.close_gate is not None:
+            await self.launcher.close_gate.wait()
         self.closed = True
         await self.browser.close()
 
 
 class FakeLauncher:
-    def __init__(self, error=None, gate=None):
+    def __init__(self, error=None, gate=None, close_gate=None):
         self.calls = 0
         self.error = error
         self.gate = gate
+        self.close_gate = close_gate
         self.sessions = []
         self.started = asyncio.Event()
+        self.close_started = asyncio.Event()
 
     async def __call__(self):
         self.calls += 1
         if self.error is not None:
             raise self.error
-        session = FakeSession(FakeBrowser(self.gate))
+        session = FakeSession(FakeBrowser(self.gate), self)
         self.sessions.append(session)
         self.started.set()
         return session
@@ -239,6 +245,62 @@ async def test_camoufox_concurrent_closes_do_not_deadlock(provider, gate):
     gate.set()
     await fetch
     await asyncio.wait_for(asyncio.gather(first, second), timeout=5)
+    assert provider.launcher.sessions[0].closed is True
+
+
+@pytest.mark.asyncio
+async def test_camoufox_fetch_during_shutdown_gets_provider_closing():
+    launcher = FakeLauncher()
+    provider = make_provider(launcher=launcher)
+    await provider.fetch("https://example.com/a")
+    launcher.close_gate = asyncio.Event()
+    close = asyncio.create_task(provider.close())
+    await launcher.close_started.wait()
+    result = await provider.fetch("https://example.com/b")
+    assert result.error is not None and "closing" in (result.error or "")
+    assert launcher.calls == 1
+    launcher.close_gate.set()
+    await close
+    assert launcher.sessions[0].closed is True
+
+
+@pytest.mark.asyncio
+async def test_camoufox_concurrent_closes_wait_for_session_close(provider, gate):
+    fetch = asyncio.create_task(provider.fetch("https://example.com/slow"))
+    await provider.launcher.started.wait()
+    gate.set()
+    await fetch
+    provider.launcher.close_gate = asyncio.Event()
+    first = asyncio.create_task(provider.close())
+    second = asyncio.create_task(provider.close())
+    await provider.launcher.close_started.wait()
+    await asyncio.sleep(0)
+    assert not first.done()
+    assert not second.done()
+    provider.launcher.close_gate.set()
+    await asyncio.wait_for(asyncio.gather(first, second), timeout=5)
+    assert provider.launcher.sessions[0].closed is True
+
+
+@pytest.mark.asyncio
+async def test_camoufox_close_caller_cancel_keeps_cleanup_owned(provider, gate):
+    fetch = asyncio.create_task(provider.fetch("https://example.com/slow"))
+    await provider.launcher.started.wait()
+    gate.set()
+    await fetch
+    provider.launcher.close_gate = asyncio.Event()
+    first = asyncio.create_task(provider.close())
+    await provider.launcher.close_started.wait()
+    first.cancel()
+    try:
+        await first
+        raise AssertionError("first close was not cancelled")
+    except asyncio.CancelledError:
+        pass
+    assert provider.launcher.sessions[0].closed is False
+    second = asyncio.create_task(provider.close())
+    provider.launcher.close_gate.set()
+    await asyncio.wait_for(second, timeout=5)
     assert provider.launcher.sessions[0].closed is True
 
 

@@ -127,6 +127,9 @@ class FakeCrawler:
         return FakeContainer()
 
     async def close(self):
+        self.factory.close_started.set()
+        if self.factory.close_gate is not None:
+            await self.factory.close_gate.wait()
         self.closed = True
         self.factory.closed += 1
 
@@ -139,6 +142,8 @@ class FakeCrawlerFactory:
         self.crawlers = []
         self.started = asyncio.Event()
         self.gate = gate
+        self.close_started = asyncio.Event()
+        self.close_gate = None
 
     def __call__(self, proxy=None):
         self.created += 1
@@ -241,6 +246,60 @@ async def test_browser_concurrent_closes_do_not_deadlock(provider, gate):
     gate.set()
     await fetch
     await asyncio.wait_for(asyncio.gather(first, second), timeout=5)
+    assert provider.factory.closed == 1
+
+
+@pytest.mark.asyncio
+async def test_browser_fetch_during_shutdown_gets_provider_closing(provider):
+    await provider.fetch("https://example.com/a")
+    provider.factory.close_gate = asyncio.Event()
+    close = asyncio.create_task(provider.close())
+    await provider.factory.close_started.wait()
+    result = await provider.fetch("https://example.com/b")
+    assert result.error is not None and "closing" in (result.error or "")
+    assert provider.factory.created == 1
+    provider.factory.close_gate.set()
+    await close
+    assert provider.factory.closed == 1
+
+
+@pytest.mark.asyncio
+async def test_browser_concurrent_closes_wait_for_resource_close(provider, gate):
+    fetch = asyncio.create_task(provider.fetch("https://example.com/slow"))
+    await provider.factory.started.wait()
+    gate.set()
+    await fetch
+    provider.factory.close_gate = asyncio.Event()
+    first = asyncio.create_task(provider.close())
+    second = asyncio.create_task(provider.close())
+    await provider.factory.close_started.wait()
+    await asyncio.sleep(0)
+    assert not first.done()
+    assert not second.done()
+    provider.factory.close_gate.set()
+    await asyncio.wait_for(asyncio.gather(first, second), timeout=5)
+    assert provider.factory.closed == 1
+
+
+@pytest.mark.asyncio
+async def test_browser_close_caller_cancel_keeps_cleanup_owned(provider, gate):
+    fetch = asyncio.create_task(provider.fetch("https://example.com/slow"))
+    await provider.factory.started.wait()
+    gate.set()
+    await fetch
+    provider.factory.close_gate = asyncio.Event()
+    first = asyncio.create_task(provider.close())
+    await provider.factory.close_started.wait()
+    first.cancel()
+    try:
+        await first
+        raise AssertionError("first close was not cancelled")
+    except asyncio.CancelledError:
+        pass
+    assert provider.factory.closed == 0
+    second = asyncio.create_task(provider.close())
+    provider.factory.close_gate.set()
+    await asyncio.wait_for(second, timeout=5)
     assert provider.factory.closed == 1
 
 
