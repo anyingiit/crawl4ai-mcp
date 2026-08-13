@@ -3,8 +3,10 @@ from __future__ import annotations
 import asyncio
 import time
 from collections import deque
+from urllib.parse import unquote, urlsplit
 
 import psutil
+from crawl4ai.async_configs import ProxyConfig
 
 from crawl4ai_mcp.cascade import CascadeEngine
 from crawl4ai_mcp.config import AppConfig
@@ -23,6 +25,18 @@ def parse_tier(value: str | None) -> Tier | None:
     if value is None or value == "":
         return None
     return Tier[value.upper()]
+
+
+def parse_proxy_url(url: str) -> ProxyConfig:
+    parts = urlsplit(url)
+    scheme = parts.scheme or "http"
+    host = parts.hostname or ""
+    port = parts.port or (443 if scheme == "https" else 80)
+    return ProxyConfig(
+        server=f"{scheme}://{host}:{port}",
+        username=unquote(parts.username) if parts.username else None,
+        password=unquote(parts.password) if parts.password else None,
+    )
 
 
 class CrawlService:
@@ -72,7 +86,7 @@ class CrawlService:
                 Tier.PROXY,
                 self.config.chromium_idle_seconds,
                 semaphore,
-                proxy_pool=proxies,
+                proxy_pool=[parse_proxy_url(proxy) for proxy in proxies],
             )
         if Tier.RAYOBYTE in enabled:
             providers[Tier.RAYOBYTE] = RayobyteProvider(
@@ -135,7 +149,7 @@ class CrawlService:
     async def scrape(
         self, url: str, max_tier: str = "firecrawl", force_tier: str | None = None
     ) -> dict:
-        maximum = parse_tier(max_tier) or Tier.FIRECRAWL
+        maximum = parse_tier(max_tier) if max_tier else Tier.FIRECRAWL
         force = parse_tier(force_tier)
         result = await self.engine.scrape(url, maximum=maximum, force=force)
         payload = result.model_dump(mode="json")

@@ -30,3 +30,6 @@ where = ["src"]
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+markers = [
+  "live: network-backed tests; opt in with CRAWL4AI_MCP_LIVE_TESTS=1",
+]

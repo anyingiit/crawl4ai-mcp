@@ -43,9 +43,14 @@ class FirecrawlProvider:
                 },
             )
             if response.status_code in {402, 429} or response.status_code >= 500:
+                detail = ""
+                try:
+                    detail = (response.json().get("error") or "").strip()
+                except Exception:
+                    pass
+                message = detail or f"firecrawl http {response.status_code}"
                 return failed_result(
-                    url, self.tier, self.cost_kind,
-                    f"firecrawl http {response.status_code}",
+                    url, self.tier, self.cost_kind, message,
                     started,
                     status_code=response.status_code,
                 )
