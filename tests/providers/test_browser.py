@@ -276,6 +276,31 @@ async def test_browser_guard_install_failure_shared_and_retryable():
 
 
 @pytest.mark.asyncio
+async def test_browser_guard_install_cancel_does_not_cancel_shared_registration():
+    guard = BrowserRequestGuard(public_policy())
+    gate = asyncio.Event()
+    context = GatedRouteContext(gate=gate)
+    first = asyncio.create_task(guard.install(context))
+    await asyncio.sleep(0.02)
+    second = asyncio.create_task(guard.install(context))
+    await asyncio.sleep(0.02)
+    assert not second.done()
+    first.cancel()
+    try:
+        await first
+        raise AssertionError("first waiter was not cancelled")
+    except asyncio.CancelledError:
+        pass
+    await asyncio.sleep(0.02)
+    assert context.route_calls == 1
+    gate.set()
+    await second
+    assert context.route_calls == 1
+    await guard.install(context)
+    assert context.route_calls == 1
+
+
+@pytest.mark.asyncio
 async def test_proxy_provider_rotates_on_consecutive_fetches_without_reap(fake_clock):
     factory = FakeCrawlerFactory()
     egress = FakePinnedProxy()

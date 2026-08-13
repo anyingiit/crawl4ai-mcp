@@ -255,7 +255,8 @@ class BrowserRequestGuard:
 
     Install is idempotent per context and synchronized: concurrent
     installs await the same in-flight registration instead of racing
-    past a pending `context.route()` call.
+    past a pending `context.route()` call, and the shared registration
+    is shielded so cancelling one waiter never cancels it for everyone.
     """
 
     def __init__(self, policy: UrlPolicy):
@@ -266,7 +267,7 @@ class BrowserRequestGuard:
     async def install(self, context) -> None:
         pending = self._inflight.get(context)
         if pending is not None:
-            await pending
+            await asyncio.shield(pending)
             return
         if context in self._installed:
             return
@@ -274,10 +275,10 @@ class BrowserRequestGuard:
             self._register(context)
         )
         self._inflight[context] = registration
-        try:
-            await registration
-        finally:
-            self._inflight.pop(context, None)
+        registration.add_done_callback(
+            lambda _task, ctx=context: self._inflight.pop(ctx, None)
+        )
+        await asyncio.shield(registration)
 
     async def _register(self, context) -> None:
         try:
