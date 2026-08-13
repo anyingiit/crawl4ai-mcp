@@ -39,13 +39,16 @@ class FakeResponse:
 
 
 class FakePage:
-    def __init__(self, gate=None):
+    def __init__(self, gate=None, final_url=None):
         self.gate = gate
+        self.final_url = final_url
+        self.url = "about:blank"
         self.closed = False
 
     async def goto(self, url, **kwargs):
         if self.gate is not None:
             await self.gate.wait()
+        self.url = self.final_url or url
         return FakeResponse()
 
     async def wait_for_load_state(self, *args, **kwargs):
@@ -59,25 +62,27 @@ class FakePage:
 
 
 class FakeContext:
-    def __init__(self, gate=None):
+    def __init__(self, gate=None, final_url=None):
         self.gate = gate
+        self.final_url = final_url
         self.closed = False
 
     async def new_page(self):
-        return FakePage(self.gate)
+        return FakePage(self.gate, self.final_url)
 
     async def close(self):
         self.closed = True
 
 
 class FakeBrowser:
-    def __init__(self, gate=None):
+    def __init__(self, gate=None, final_url=None):
         self.gate = gate
+        self.final_url = final_url
         self.closed = False
         self.contexts = []
 
     async def new_context(self, **kwargs):
-        context = FakeContext(self.gate)
+        context = FakeContext(self.gate, self.final_url)
         context.kwargs = kwargs
         self.contexts.append(context)
         return context
@@ -104,11 +109,12 @@ class FakeSession:
 
 
 class FakeLauncher:
-    def __init__(self, error=None, gate=None, close_gate=None):
+    def __init__(self, error=None, gate=None, close_gate=None, final_url=None):
         self.calls = 0
         self.error = error
         self.gate = gate
         self.close_gate = close_gate
+        self.final_url = final_url
         self.sessions = []
         self.started = asyncio.Event()
         self.close_started = asyncio.Event()
@@ -117,7 +123,7 @@ class FakeLauncher:
         self.calls += 1
         if self.error is not None:
             raise self.error
-        session = FakeSession(FakeBrowser(self.gate), self)
+        session = FakeSession(FakeBrowser(self.gate, self.final_url), self)
         self.sessions.append(session)
         self.started.set()
         return session
@@ -395,6 +401,30 @@ async def test_camoufox_launch_failure_is_normalized():
     assert availability.ready is False
     assert "artifact missing" in (availability.reason or "")
     await provider.close()
+
+
+@pytest.mark.asyncio
+async def test_camoufox_records_no_redirect_when_final_url_unchanged():
+    launcher = FakeLauncher()
+    provider = make_provider(launcher=launcher)
+    try:
+        result = await provider.fetch("https://example.com/")
+        assert result.redirected_url is None
+    finally:
+        await provider.close()
+
+
+@pytest.mark.asyncio
+async def test_camoufox_records_redirected_url_after_page_redirect():
+    launcher = FakeLauncher(final_url="https://cdn.example.com/landed")
+    provider = make_provider(launcher=launcher)
+    try:
+        result = await provider.fetch("https://example.com/start")
+        assert result.url == "https://example.com/start"
+        assert result.redirected_url == "https://cdn.example.com/landed"
+        assert result.status_code == 200
+    finally:
+        await provider.close()
 
 
 @pytest.mark.asyncio

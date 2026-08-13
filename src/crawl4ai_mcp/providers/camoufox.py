@@ -131,6 +131,7 @@ class CamoufoxProvider:
                         )
                     except Exception as exc:
                         return fail(exc, network=True)
+                    final_url = page.url
                     try:
                         await page.wait_for_load_state("networkidle", timeout=5_000)
                     except Exception:
@@ -151,6 +152,7 @@ class CamoufoxProvider:
                     cost_kind=self.cost_kind,
                     status_code=response.status if response is not None else None,
                     html=html,
+                    redirected_url=final_url if final_url != url else None,
                     elapsed_ms=int((time.monotonic() - started) * 1000),
                 )
             finally:

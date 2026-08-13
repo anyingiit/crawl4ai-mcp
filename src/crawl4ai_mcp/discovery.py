@@ -14,7 +14,6 @@ from crawl4ai_mcp.egress import (
     PinnedEgressProxy,
     UrlPolicy,
     UrlPolicyError,
-    normalized_origin,
     parse_public_url,
     same_origin,
 )
@@ -197,12 +196,15 @@ async def crawl_site(
     if not 1 <= max_depth <= MAX_CRAWL_DEPTH:
         raise ValueError(f"max_depth must be between 1 and {MAX_CRAWL_DEPTH}")
 
-    origin = normalized_origin(url)
+    validated = parse_public_url(url)
+    root = validated.url
+    origin = validated.origin
     if policy is not None:
-        await policy.resolve(url)
+        await policy.resolve(root)
 
-    queue: deque[tuple[str, int]] = deque([(url, 0)])
+    queue: deque[tuple[str, int]] = deque([(root, 0)])
     visited: set[str] = set()
+    queued: set[str] = {root}
     pages: list[CrawlPage] = []
     started = time.monotonic()
     max_depth_reached = 0
@@ -216,13 +218,13 @@ async def crawl_site(
         max_depth_reached = max(max_depth_reached, depth)
         if depth >= max_depth or outcome.response.status != "success":
             continue
-        if outcome.raw_html is None or not same_origin(outcome.effective_url, url):
+        if outcome.raw_html is None or not same_origin(outcome.effective_url, root):
             continue
-        queued = {item[0] for item in queue}
         for link in extract_links(
             outcome.raw_html, outcome.effective_url, origin, include_pattern
         ):
             if link not in visited and link not in queued:
+                queued.add(link)
                 queue.append((link, depth + 1))
     stats = CrawlStats(
         attempted_pages=len(pages),

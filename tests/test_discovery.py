@@ -326,7 +326,7 @@ class ScriptedEngine:
 
     async def scrape(self, url, maximum=Tier.FIRECRAWL, force=None):
         self.calls.append(url)
-        return self.outcomes[url]
+        return self.outcomes.get(url) or successful_outcome(url, raw_html=None)
 
 
 def successful_outcome(url, raw_html="", effective_url=None, markdown="# ok"):
@@ -388,6 +388,69 @@ async def test_crawl_does_not_follow_links_after_cross_origin_redirect():
     engine = ScriptedEngine(cross_origin_redirect_outcome())
     crawl = await crawl_site("https://example.com/", engine=engine, policy=public_policy())
     assert len(crawl.pages) == 1
+
+
+@pytest.mark.asyncio
+async def test_crawl_stops_discovery_after_cross_origin_redirect_through_cascade(policy_store):
+    calls = []
+
+    def redirect_handler(url, tier):
+        return FetchResult(
+            url=url, tier=tier, cost_kind=CostKind.FREE, status_code=200,
+            html='<main><a href="/child">child</a></main>',
+            markdown="ok", elapsed_ms=1,
+            redirected_url="https://evil.example/landed",
+        )
+
+    providers = {tier: ScriptedProvider(tier, redirect_handler, calls) for tier in Tier}
+    engine = CascadeEngine(providers, None, threshold=200)
+    engine.policy = policy_store
+    crawl = await crawl_site("http://localhost:9000/", engine=engine, max_pages=10, max_depth=2)
+    assert [page.url for page in crawl.pages] == ["http://localhost:9000/"]
+    assert calls == [Tier.HTTP]
+    assert crawl.stats.attempted_pages == 1
+
+
+@pytest.mark.asyncio
+async def test_crawl_canonicalizes_root_before_queue_and_fetch():
+    engine = ScriptedEngine({
+        "https://example.com/path": successful_outcome(
+            "https://example.com/path",
+            raw_html='<main><a href="path">self</a></main>',
+        ),
+    })
+    crawl = await crawl_site(
+        "https://EXAMPLE.com.:443/path#frag", engine=engine,
+        policy=public_policy(), max_pages=10, max_depth=2,
+    )
+    assert [page.url for page in crawl.pages] == ["https://example.com/path"]
+    assert engine.calls == ["https://example.com/path"]
+    assert crawl.stats.attempted_pages == 1
+    assert crawl.stats.successful_pages == 1
+
+
+def duplicate_links_outcome():
+    dups = "".join('<a href="/dup">dup</a>' for _ in range(50))
+    return {
+        "https://example.com/": successful_outcome(
+            "https://example.com/", raw_html=f"<main>{dups}</main>"
+        ),
+        "https://example.com/dup": successful_outcome(
+            "https://example.com/dup", raw_html="<main>dup</main>"
+        ),
+    }
+
+
+@pytest.mark.asyncio
+async def test_crawl_bounds_queue_when_page_has_duplicate_links():
+    engine = ScriptedEngine(duplicate_links_outcome())
+    crawl = await crawl_site("https://example.com/", engine=engine, policy=public_policy(), max_pages=10, max_depth=2)
+    assert [page.url for page in crawl.pages] == [
+        "https://example.com/", "https://example.com/dup",
+    ]
+    assert engine.calls == ["https://example.com/", "https://example.com/dup"]
+    assert crawl.stats.attempted_pages == 2
+    assert crawl.stats.successful_pages == 2
 
 
 @pytest.fixture
