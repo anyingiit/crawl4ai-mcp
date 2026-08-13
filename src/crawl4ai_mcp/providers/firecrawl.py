@@ -15,7 +15,6 @@ from crawl4ai_mcp.providers.base import (
     classify_provider_error,
     extract_error_detail,
     failed_result,
-    safe_error_detail,
 )
 
 API_URL = "https://api.firecrawl.dev/v2/scrape"
@@ -85,6 +84,29 @@ class FirecrawlProvider:
                 provider_error_kind=ProviderErrorKind.MALFORMED_RESPONSE,
                 provider_error="malformed firecrawl response",
             )
+        if data.get("success") is False:
+            detail = extract_error_detail(
+                response, [self.api_key] if self.api_key else None
+            )
+            message = detail or "firecrawl request failed"
+            kind = (
+                ProviderErrorKind.QUOTA
+                if "credit" in message.lower()
+                else ProviderErrorKind.SERVICE
+            )
+            return failed_result(
+                url, self.tier, self.cost_kind, message, started,
+                provider_status_code=provider_status,
+                provider_error_kind=kind,
+                provider_error=message,
+            )
+        if data.get("success") is not True:
+            return failed_result(
+                url, self.tier, self.cost_kind, "malformed firecrawl response", started,
+                provider_status_code=provider_status,
+                provider_error_kind=ProviderErrorKind.MALFORMED_RESPONSE,
+                provider_error="firecrawl response missing success flag",
+            )
         payload = data.get("data")
         metadata = payload.get("metadata") if isinstance(payload, dict) else None
         target_status = metadata.get("statusCode") if isinstance(metadata, dict) else None
@@ -111,9 +133,6 @@ class FirecrawlProvider:
             html=html_value or "",
             markdown=markdown_value,
             elapsed_ms=int((time.monotonic() - started) * 1000),
-            error=(
-                safe_error_detail(data.get("error"), [self.api_key] if self.api_key else None) or None
-            ) if data.get("success") is False else None,
         )
 
     async def close(self) -> None:

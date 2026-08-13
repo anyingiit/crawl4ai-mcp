@@ -79,21 +79,27 @@ class RayobyteProvider:
                 provider_error_kind=ProviderErrorKind.MALFORMED_RESPONSE,
                 provider_error="malformed rayobyte response",
             )
-        if data.get("status") == "FAIL":
-            provider_code = data.get("statusCode")
-            detail = safe_error_detail(data.get("error"), [self.api_key] if self.api_key else None)
+        status = data.get("status")
+        if status != "SUCCESS":
+            detail = safe_error_detail(
+                data.get("error"), [self.api_key] if self.api_key else None
+            )
             message = detail or "rayobyte request failed"
-            if not isinstance(provider_code, int) or isinstance(provider_code, bool):
+            provider_code = data.get("statusCode")
+            if (
+                isinstance(provider_code, int)
+                and not isinstance(provider_code, bool)
+            ):
                 return failed_result(
                     url, self.tier, self.cost_kind, message, started,
-                    provider_status_code=provider_status,
-                    provider_error_kind=ProviderErrorKind.MALFORMED_RESPONSE,
+                    provider_status_code=provider_code,
+                    provider_error_kind=classify_provider_error(provider_code, detail),
                     provider_error=message,
                 )
             return failed_result(
                 url, self.tier, self.cost_kind, message, started,
-                provider_status_code=provider_code,
-                provider_error_kind=classify_provider_error(provider_code, detail),
+                provider_status_code=provider_status,
+                provider_error_kind=ProviderErrorKind.MALFORMED_RESPONSE,
                 provider_error=message,
             )
         if "httpCode" not in data or "result" not in data:

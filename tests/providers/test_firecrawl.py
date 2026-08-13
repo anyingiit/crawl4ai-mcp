@@ -199,3 +199,43 @@ async def test_firecrawl_unavailable_without_key():
     assert result.provider_error_kind is None
     assert result.error is not None
     await provider.close()
+
+
+@pytest.mark.asyncio
+async def test_firecrawl_http200_success_false_credit_text_is_quota(respx_mock):
+    respx_mock.post(API_URL).mock(
+        return_value=httpx.Response(
+            200, json={"success": False, "error": "insufficient credits for this url"}
+        )
+    )
+    result = await FirecrawlProvider("fc-test").fetch("https://example.com/")
+    assert result.target_status_code is None
+    assert result.provider_status_code == 200
+    assert result.provider_error_kind == ProviderErrorKind.QUOTA
+    assert "credits" in (result.provider_error or "")
+
+
+@pytest.mark.asyncio
+async def test_firecrawl_http200_success_false_generic_error_is_provider_failure(respx_mock):
+    respx_mock.post(API_URL).mock(
+        return_value=httpx.Response(
+            200, json={"success": False, "error": "provider internal error"}
+        )
+    )
+    result = await FirecrawlProvider("fc-test").fetch("https://example.com/")
+    assert result.target_status_code is None
+    assert result.provider_status_code == 200
+    assert result.provider_error_kind == ProviderErrorKind.SERVICE
+    assert result.provider_error is not None
+
+
+@pytest.mark.asyncio
+async def test_firecrawl_http200_missing_success_flag_is_malformed(respx_mock):
+    respx_mock.post(API_URL).mock(
+        return_value=httpx.Response(
+            200, json={"data": {"markdown": "# x", "metadata": {"statusCode": 200}}}
+        )
+    )
+    result = await FirecrawlProvider("fc-test").fetch("https://example.com/")
+    assert result.target_status_code is None
+    assert result.provider_error_kind == ProviderErrorKind.MALFORMED_RESPONSE

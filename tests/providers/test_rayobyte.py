@@ -283,3 +283,42 @@ async def test_rayobyte_unavailable_without_credentials():
     assert result.provider_error_kind is None
     assert result.error is not None
     await provider.close()
+
+
+@pytest.mark.asyncio
+async def test_rayobyte_unknown_status_envelope_is_provider_failure(respx_mock):
+    respx_mock.get(API_URL).mock(
+        return_value=httpx.Response(
+            200, json={"status": "ERROR", "statusCode": 500, "error": "upstream boom"}
+        )
+    )
+    result = await RayobyteProvider(API_URL, "key").fetch("https://example.com/")
+    assert result.target_status_code is None
+    assert result.provider_status_code == 500
+    assert result.provider_error_kind == ProviderErrorKind.SERVICE
+    assert result.provider_error is not None
+
+
+@pytest.mark.asyncio
+async def test_rayobyte_missing_status_envelope_is_provider_failure(respx_mock):
+    respx_mock.get(API_URL).mock(
+        return_value=httpx.Response(
+            200, json={"httpCode": 200, "result": "<main>Hello</main>"}
+        )
+    )
+    result = await RayobyteProvider(API_URL, "key").fetch("https://example.com/")
+    assert result.target_status_code is None
+    assert result.provider_status_code == 200
+    assert result.provider_error_kind == ProviderErrorKind.MALFORMED_RESPONSE
+
+
+@pytest.mark.asyncio
+async def test_rayobyte_success_status_is_exact_string_required(respx_mock):
+    respx_mock.get(API_URL).mock(
+        return_value=httpx.Response(
+            200, json={"status": "success", "httpCode": 200, "result": "<main>Hello</main>"}
+        )
+    )
+    result = await RayobyteProvider(API_URL, "key").fetch("https://example.com/")
+    assert result.target_status_code is None
+    assert result.provider_error_kind == ProviderErrorKind.MALFORMED_RESPONSE
