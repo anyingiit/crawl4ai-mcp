@@ -92,6 +92,8 @@ class CascadeEngine:
             tier = queue.pop(0)
             if tier > maximum or tier in attempted:
                 continue
+            if cloudflare_seen and tier == Tier.PROXY:
+                continue
             provider = self.providers.get(tier)
             if provider is None or not provider.availability().ready:
                 _extend(queue, next_tiers(tier, Decision.PROVIDER_FAILURE, maximum))
@@ -162,8 +164,6 @@ class CascadeEngine:
                     response=response, raw_html=None, effective_url=url
                 )
             candidates = next_tiers(tier, decision, maximum)
-            if cloudflare_seen:
-                candidates = [candidate for candidate in candidates if candidate != Tier.PROXY]
             _extend(queue, candidates)
         policy = await self.policy.record_failure(url, "all_failed", now)
         response = ScrapeResponse(

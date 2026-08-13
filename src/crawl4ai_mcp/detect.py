@@ -14,11 +14,7 @@ CLOUDFLARE_MARKERS = (
 def classify(result: FetchResult, visible_text_threshold: int = 200) -> Decision:
     if result.policy_error:
         return Decision.POLICY_REJECTED
-    if result.network_error or (
-        result.error
-        and result.target_status_code is None
-        and result.provider_status_code is None
-    ):
+    if result.network_error:
         return Decision.TARGET_NETWORK
     if result.provider_status_code is not None and result.target_status_code is None:
         return Decision.PROVIDER_FAILURE

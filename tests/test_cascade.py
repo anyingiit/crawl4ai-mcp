@@ -48,7 +48,14 @@ def not_found(url, tier):
 def network_error(url, tier):
     return FetchResult(
         url=url, tier=tier, cost_kind=CostKind.FREE, status_code=None,
-        error="Connection refused", elapsed_ms=5,
+        network_error="connection_refused", error="Connection refused", elapsed_ms=5,
+    )
+
+
+def generic_error(url, tier):
+    return FetchResult(
+        url=url, tier=tier, cost_kind=CostKind.FREE, status_code=None,
+        error="Invalid token", elapsed_ms=5,
     )
 
 
@@ -200,6 +207,39 @@ async def test_cloudflare_seen_once_permanently_forbids_proxy(engine):
     outcome = await engine.scrape("https://protected.example/")
     assert Tier.PROXY not in engine.calls
     assert outcome.response.tier_used == "rayobyte"
+
+
+@pytest.mark.asyncio
+async def test_already_queued_proxy_is_excluded_once_cloudflare_seen(tmp_path):
+    engine, policy = await make_engine(tmp_path, {
+        Tier.HTTP: short_js, Tier.STEALTH: cloudflare, Tier.UNDETECTED: cloudflare,
+        Tier.CAMOUFOX: cloudflare, Tier.PROXY: success, Tier.RAYOBYTE: success,
+    })
+    try:
+        outcome = await engine.scrape("https://protected.example/")
+        assert Tier.PROXY not in engine.calls
+        assert engine.calls == [
+            Tier.HTTP, Tier.STEALTH, Tier.UNDETECTED,
+            Tier.CAMOUFOX, Tier.RAYOBYTE,
+        ]
+        assert outcome.response.tier_used == "rayobyte"
+    finally:
+        await policy.close()
+
+
+@pytest.mark.asyncio
+async def test_untyped_provider_error_falls_back_to_next_available_tier(tmp_path):
+    engine, policy = await make_engine(tmp_path, {
+        Tier.RAYOBYTE: generic_error, Tier.FIRECRAWL: success,
+    })
+    await policy.record_success("https://hard.example/a", Tier.RAYOBYTE, now=1000)
+    try:
+        outcome = await engine.scrape("https://hard.example/b")
+        assert engine.calls == [Tier.RAYOBYTE, Tier.FIRECRAWL]
+        assert outcome.response.status == "success"
+        assert outcome.response.attempts[0].decision == Decision.FAILED
+    finally:
+        await policy.close()
 
 
 @pytest.mark.asyncio

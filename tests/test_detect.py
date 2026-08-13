@@ -41,6 +41,15 @@ def test_network_error_is_target_network_decision():
     assert classify(result) == Decision.TARGET_NETWORK
 
 
+def test_untyped_error_without_status_remains_failed():
+    result = FetchResult(
+        url="https://example.com", tier=Tier.RAYOBYTE,
+        cost_kind=CostKind.RAYOBYTE_CREDIT,
+        target_status_code=None, error="Invalid token", elapsed_ms=1,
+    )
+    assert classify(result) == Decision.FAILED
+
+
 def test_policy_error_is_policy_rejected_decision():
     result = FetchResult(
         url="https://example.com", tier=Tier.HTTP, cost_kind=CostKind.FREE,
