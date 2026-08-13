@@ -261,6 +261,25 @@ def test_upstream_connect_omits_auth_without_credentials():
     assert b"Proxy-Authorization" not in request
 
 
+def test_upstream_proxy_repr_redacts_credentials_but_keeps_server():
+    proxy = UpstreamProxy(
+        "http://proxy.example:8080",
+        "sentinel-user-9f3c7a",
+        "sentinel-pass-9f3c7a",
+    )
+    text = repr(proxy)
+    assert "sentinel-user-9f3c7a" not in text
+    assert "sentinel-pass-9f3c7a" not in text
+    assert "proxy.example" in text
+
+
+def test_upstream_proxy_equality_and_hash_ignore_repr_redaction():
+    first = UpstreamProxy("http://proxy.example:8080", "u", "p")
+    second = UpstreamProxy("http://proxy.example:8080", "u", "p")
+    assert first == second
+    assert hash(first) == hash(second)
+
+
 async def _echo_server(started: asyncio.Future):
     async def handle(reader, writer):
         try:

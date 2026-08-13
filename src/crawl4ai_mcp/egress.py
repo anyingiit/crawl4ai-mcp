@@ -6,7 +6,7 @@ import ipaddress
 import socket
 import ssl
 import weakref
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Awaitable, Callable, Sequence
 from urllib.parse import urlsplit, urlunsplit
@@ -440,8 +440,8 @@ _MAX_HEADER_BYTES = 64 * 1024
 @dataclass(frozen=True)
 class UpstreamProxy:
     server: str
-    username: str | None = None
-    password: str | None = None
+    username: str | None = field(default=None, repr=False)
+    password: str | None = field(default=None, repr=False)
 
 
 def _basic_auth(upstream: UpstreamProxy) -> str | None:
