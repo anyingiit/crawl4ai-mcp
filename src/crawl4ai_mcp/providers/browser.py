@@ -139,14 +139,21 @@ class BrowserProvider:
                         url, self.tier, self.cost_kind, "provider closing", started
                     )
                 if self._crawler is None:
-                    self._crawler = self._factory()
+                    try:
+                        self._crawler = self._factory()
+                    except Exception as exc:
+                        return failed_result(
+                            url, self.tier, self.cost_kind, str(exc), started,
+                            provider_error_kind=ProviderErrorKind.SERVICE,
+                            provider_error=str(exc),
+                        )
                     self._install_guard()
                 crawler = self._crawler
                 self._active_fetches += 1
             marker = self.request_guard.blocked_marker()
             try:
-                config = self._run_config()
                 try:
+                    config = self._run_config()
                     container = await crawler.arun(url=url, config=config)
                 except Exception as exc:
                     network_error = (

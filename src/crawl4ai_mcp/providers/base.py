@@ -90,6 +90,22 @@ def failed_result(
     )
 
 
+def unexpected_failure(
+    url: str, tier: Tier, cost_kind: CostKind, exc: Exception
+) -> FetchResult:
+    """Structured SERVICE failure for an unexpected provider exception."""
+    detail = safe_error_detail(str(exc))
+    return FetchResult(
+        url=url,
+        tier=tier,
+        cost_kind=cost_kind,
+        provider_error_kind=ProviderErrorKind.SERVICE,
+        provider_error=detail,
+        error=detail,
+        elapsed_ms=0,
+    )
+
+
 @runtime_checkable
 class FetchProvider(Protocol):
     tier: Tier

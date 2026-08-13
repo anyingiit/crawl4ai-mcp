@@ -610,3 +610,70 @@ class _FakeNavigationRequest:
 
     def is_navigation_request(self):
         return True
+
+
+class ExplodingProvider:
+    def __init__(self, tier):
+        self.tier = tier
+        self.cost_kind = CostKind.FREE
+
+    async def fetch(self, url):
+        raise RuntimeError("provider exploded unexpectedly")
+
+    async def close(self):
+        pass
+
+    def availability(self):
+        return ProviderAvailability(enabled=True, ready=True)
+
+
+@pytest.mark.asyncio
+async def test_unexpected_provider_exception_becomes_service_failure_and_escalates(tmp_path):
+    providers = {
+        Tier.RAYOBYTE: ExplodingProvider(Tier.RAYOBYTE),
+        Tier.FIRECRAWL: ScriptedProvider(Tier.FIRECRAWL),
+    }
+    policy = await PolicyStore.open(tmp_path / "policy.db")
+    engine = CascadeEngine(providers, policy, threshold=200, clock=FakeClock(1000))
+    await policy.record_success("https://hard.example/a", Tier.RAYOBYTE, now=1000)
+    try:
+        outcome = await engine.scrape("https://hard.example/b")
+        assert outcome.response.status == "success"
+        assert engine.calls == [Tier.RAYOBYTE, Tier.FIRECRAWL]
+        assert outcome.response.attempts[0].decision == Decision.PROVIDER_FAILURE
+        assert outcome.response.attempts[0].provider_error_kind == ProviderErrorKind.SERVICE
+        assert "exploded" in (outcome.response.attempts[0].provider_error or "")
+    finally:
+        await policy.close()
+
+
+@pytest.mark.asyncio
+async def test_cascade_does_not_swallow_cancelled_error(tmp_path):
+    class CancelProvider(ExplodingProvider):
+        async def fetch(self, url):
+            raise asyncio.CancelledError()
+
+    providers = {Tier.HTTP: CancelProvider(Tier.HTTP)}
+    policy = await PolicyStore.open(tmp_path / "policy.db")
+    engine = CascadeEngine(providers, policy, threshold=200, clock=FakeClock(1000))
+    try:
+        with pytest.raises(asyncio.CancelledError):
+            await engine.scrape("https://example.com/")
+    finally:
+        await policy.close()
+
+
+@pytest.mark.asyncio
+async def test_unexpected_exception_on_only_tier_records_cooldown(tmp_path):
+    providers = {Tier.HTTP: ExplodingProvider(Tier.HTTP)}
+    policy = await PolicyStore.open(tmp_path / "policy.db")
+    engine = CascadeEngine(providers, policy, threshold=200, clock=FakeClock(1000))
+    try:
+        outcome = await engine.scrape("https://example.com/")
+        assert outcome.response.status == "failed"
+        assert [a.decision for a in outcome.response.attempts] == [
+            Decision.PROVIDER_FAILURE
+        ]
+        assert outcome.response.cooldown_until == 1000 + 600
+    finally:
+        await policy.close()

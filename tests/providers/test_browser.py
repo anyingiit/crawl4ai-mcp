@@ -6,7 +6,7 @@ from crawl4ai.async_configs import ProxyConfig
 from playwright._impl._errors import TimeoutError as PlaywrightTimeoutError
 
 from crawl4ai_mcp.egress import BrowserRequestGuard, UpstreamProxy, UrlPolicy
-from crawl4ai_mcp.models import CostKind, Tier
+from crawl4ai_mcp.models import CostKind, ProviderErrorKind, Tier
 from crawl4ai_mcp.providers.browser import BrowserProvider
 
 
@@ -880,3 +880,44 @@ async def test_browser_reap_after_terminal_close_is_noop(provider, clock):
     clock.advance(181)
     await provider.reap_idle()
     assert provider.factory.closed == 1
+
+
+@pytest.mark.asyncio
+async def test_browser_factory_exception_is_service_failure(fake_clock):
+    def failing_factory():
+        raise RuntimeError("chromium launch exploded")
+
+    provider = BrowserProvider(
+        tier=Tier.STEALTH, factory=failing_factory, idle_seconds=180,
+        semaphore=asyncio.Semaphore(2), clock=fake_clock,
+        egress_proxy=FakePinnedProxy(), request_guard=FakeRequestGuard(),
+    )
+    try:
+        result = await provider.fetch("https://example.com/")
+        assert result.target_status_code is None
+        assert result.network_error is None
+        assert result.policy_error is None
+        assert result.provider_error_kind == ProviderErrorKind.SERVICE
+        assert provider.is_active() is False
+    finally:
+        await provider.close()
+
+
+@pytest.mark.asyncio
+async def test_browser_run_config_exception_is_service_failure(fake_clock):
+    class ExplodingEgress:
+        def endpoint(self, upstream=None):
+            raise RuntimeError("proxy endpoint exploded")
+
+    factory = FakeCrawlerFactory()
+    provider = BrowserProvider(
+        tier=Tier.STEALTH, factory=factory, idle_seconds=180,
+        semaphore=asyncio.Semaphore(2), clock=fake_clock,
+        egress_proxy=ExplodingEgress(), request_guard=FakeRequestGuard(),
+    )
+    try:
+        result = await provider.fetch("https://example.com/")
+        assert result.provider_error_kind == ProviderErrorKind.SERVICE
+        assert result.target_status_code is None
+    finally:
+        await provider.close()

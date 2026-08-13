@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import time
 from typing import Callable
 
@@ -13,7 +14,7 @@ from crawl4ai_mcp.models import (
     Tier,
 )
 from crawl4ai_mcp.policy import PolicyStore
-from crawl4ai_mcp.providers.base import FetchProvider
+from crawl4ai_mcp.providers.base import FetchProvider, unexpected_failure
 from crawl4ai_mcp.render import render_html
 
 
@@ -101,7 +102,14 @@ class CascadeEngine:
             if provider is None or not provider.availability().ready:
                 _extend(queue, next_tiers(tier, Decision.PROVIDER_FAILURE, maximum))
                 continue
-            fetched: FetchResult = await provider.fetch(url)
+            try:
+                fetched: FetchResult = await provider.fetch(url)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                fetched = unexpected_failure(
+                    url, provider.tier, provider.cost_kind, exc
+                )
             self.calls.append(provider.tier)
             attempted.add(tier)
             count = attempt_counts.get(tier, 0) + 1
