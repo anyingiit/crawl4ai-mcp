@@ -25,7 +25,6 @@ from crawl4ai_mcp.models import (
     MaxDepth,
     MaxPages,
     ScrapeOutcome,
-    Tier,
 )
 
 MAX_MAP_URLS = 100
