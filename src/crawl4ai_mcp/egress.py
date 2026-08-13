@@ -440,32 +440,19 @@ class PinnedEgressProxy:
                     raise OSError("upstream closed during CONNECT handshake")
                 status = int(head.split(b"\r\n", 1)[0].split(b" ", 2)[1])
                 if status == 200:
-                    return remote_reader, remote_writer, early
+                    result = (remote_reader, remote_writer, early)
+                    remote_writer = None
+                    return result
                 if status == 407:
                     raise OSError("upstream proxy requires authentication")
                 raise OSError(f"upstream proxy rejected CONNECT with status {status}")
             except UrlPolicyError:
-                if remote_writer is not None:
-                    try:
-                        remote_writer.close()
-                    except Exception:
-                        pass
-                    try:
-                        await remote_writer.wait_closed()
-                    except Exception:
-                        pass
                 raise
             except Exception as exc:
                 last_error = exc
+            finally:
                 if remote_writer is not None:
-                    try:
-                        remote_writer.close()
-                    except Exception:
-                        pass
-                    try:
-                        await remote_writer.wait_closed()
-                    except Exception:
-                        pass
+                    await self._close_remote(remote_writer)
         raise OSError(f"all validated addresses failed via upstream: {last_error}") from last_error
 
     async def _dial_upstream(
@@ -629,6 +616,9 @@ class PinnedEgressProxy:
             if remainder:
                 remote_writer.write(remainder)
                 await remote_writer.drain()
+        except asyncio.CancelledError:
+            await self._close_remote(remote_writer)
+            raise
         except Exception:
             await self._close_remote(remote_writer)
             return
@@ -674,6 +664,9 @@ class PinnedEgressProxy:
             if early:
                 writer.write(early)
                 await writer.drain()
+        except asyncio.CancelledError:
+            await self._close_remote(remote_writer)
+            raise
         except UrlPolicyError as exc:
             await self._close_remote(remote_writer)
             await self._reject(writer, 403, str(exc))

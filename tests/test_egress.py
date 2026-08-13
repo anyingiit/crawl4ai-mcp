@@ -772,3 +772,105 @@ async def test_proxy_dials_https_upstream_by_pinned_ip_with_sni():
         assert calls[0][2].get("server_hostname") == "proxy.example"
     finally:
         await proxy.close()
+
+
+class BlockingDrainWriter(FakeWriter):
+    """Test-only writer whose drain() blocks until the handler is cancelled."""
+
+    def __init__(self):
+        super().__init__()
+        self.in_drain = asyncio.Event()
+        self.closed = False
+        self.wait_closed_called = False
+
+    async def drain(self):
+        self.in_drain.set()
+        await asyncio.Event().wait()
+
+    def close(self):
+        self.closed = True
+
+    async def wait_closed(self):
+        self.wait_closed_called = True
+
+
+async def _cancel_handler(proxy, remote):
+    handler = next(iter(proxy._connection_tasks))
+    handler.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await handler
+    assert remote.closed is True
+    assert remote.wait_closed_called is True
+
+
+@pytest.mark.asyncio
+async def test_cancelling_absolute_form_setup_closes_remote_writer():
+    remote = BlockingDrainWriter()
+
+    async def connect(host, port, **_kwargs):
+        return FakeReader(), remote
+
+    proxy = PinnedEgressProxy(public_policy(), connect=connect)
+    await proxy.start()
+    try:
+        reader, writer = await _connect_to(proxy.endpoint())
+        writer.write(b"GET http://example.com/ HTTP/1.1\r\nHost: example.com\r\n\r\n")
+        await writer.drain()
+        await asyncio.wait_for(remote.in_drain.wait(), 5)
+        await _cancel_handler(proxy, remote)
+        assert await asyncio.wait_for(reader.read(100), 5) == b""
+        writer.close()
+    finally:
+        await proxy.close()
+
+
+@pytest.mark.asyncio
+async def test_cancelling_connect_setup_closes_remote_writer():
+    remote = BlockingDrainWriter()
+
+    async def connect(host, port, **_kwargs):
+        return FakeReader(), remote
+
+    proxy = PinnedEgressProxy(public_policy(), connect=connect)
+    await proxy.start()
+    try:
+        reader, writer = await _connect_to(proxy.endpoint())
+        writer.write(
+            b"CONNECT example.com:443 HTTP/1.1\r\n"
+            b"Host: example.com:443\r\n\r\nearly"
+        )
+        await writer.drain()
+        assert await asyncio.wait_for(reader.readuntil(b"\r\n\r\n"), 5) == (
+            b"HTTP/1.1 200 Connection established\r\n\r\n"
+        )
+        await asyncio.wait_for(remote.in_drain.wait(), 5)
+        await _cancel_handler(proxy, remote)
+        assert await asyncio.wait_for(reader.read(100), 5) == b""
+        writer.close()
+    finally:
+        await proxy.close()
+
+
+@pytest.mark.asyncio
+async def test_cancelling_upstream_connect_handshake_closes_remote_writer():
+    remote = BlockingDrainWriter()
+
+    async def connect(host, port, **_kwargs):
+        return FakeReader(), remote
+
+    proxy = PinnedEgressProxy(UpstreamLoopbackPolicy(), connect=connect)
+    await proxy.start()
+    try:
+        upstream = UpstreamProxy("http://upstream.local:8080")
+        reader, writer = await _connect_to(proxy.endpoint(upstream))
+        writer.write(
+            b"CONNECT example.com:443 HTTP/1.1\r\n"
+            b"Host: example.com:443\r\n\r\n"
+        )
+        await writer.drain()
+        await asyncio.wait_for(remote.in_drain.wait(), 5)
+        await _cancel_handler(proxy, remote)
+        assert await asyncio.wait_for(reader.read(100), 5) == b""
+        writer.close()
+    finally:
+        await proxy.close()
