@@ -198,9 +198,14 @@ def test_run_acceptance_script_requires_optin(tmp_path):
     fake = tmp_path / "fake-python.py"
     fake.write_text(FAKE_PYTHON_SRC, encoding="utf-8")
     fake.chmod(0o755)
+    opt_out_env = {
+        key: value
+        for key, value in os.environ.items()
+        if key != "CRAWL4AI_MCP_LIVE_TESTS"
+    }
     completed = subprocess.run(
         [str(ROOT / "scripts" / "run-acceptance.sh")],
-        env={**os.environ, "CRAWL4AI_MCP_PYTHON": str(fake)},
+        env={**opt_out_env, "CRAWL4AI_MCP_PYTHON": str(fake)},
         text=True,
         capture_output=True,
         timeout=60,
