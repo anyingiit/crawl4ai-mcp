@@ -305,6 +305,34 @@ async def test_maximum_tier_bounds_escalation(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_success_outcome_carries_private_html_and_effective_url(tmp_path):
+    engine, policy = await make_engine(tmp_path, {Tier.HTTP: success})
+    try:
+        outcome = await engine.scrape("https://example.com/")
+        assert outcome.raw_html == "<main>" + "x" * 300 + "</main>"
+        assert outcome.effective_url == "https://example.com/"
+        assert "raw_html" not in outcome.response.model_dump(mode="json")
+    finally:
+        await policy.close()
+
+
+@pytest.mark.asyncio
+async def test_redirect_success_outcome_reports_effective_url(tmp_path):
+    def redirected(url, tier):
+        fetched = success(url, tier)
+        fetched.redirected_url = "https://cdn.example.com/page"
+        return fetched
+
+    engine, policy = await make_engine(tmp_path, {Tier.HTTP: redirected})
+    try:
+        outcome = await engine.scrape("https://example.com/start")
+        assert outcome.effective_url == "https://cdn.example.com/page"
+        assert outcome.raw_html == "<main>" + "x" * 300 + "</main>"
+    finally:
+        await policy.close()
+
+
+@pytest.mark.asyncio
 async def test_attempts_carry_full_metadata(engine_with_404):
     outcome = await engine_with_404.scrape("https://example.com/missing")
     assert len(outcome.response.attempts) == 1

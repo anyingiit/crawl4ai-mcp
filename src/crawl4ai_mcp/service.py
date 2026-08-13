@@ -216,15 +216,16 @@ class CrawlService:
         max_pages: int = 10,
         max_depth: int = 2,
         include_pattern: str | None = None,
-    ) -> list[dict]:
-        results = await crawl_site(
+    ) -> dict:
+        response = await crawl_site(
             url,
             max_pages=max_pages,
             max_depth=max_depth,
             include_pattern=include_pattern,
             engine=self.engine,
+            policy=self._url_policy,
         )
-        return [result.response.model_dump(mode="json") for result in results]
+        return response.model_dump(mode="json")
 
     async def map(
         self, url: str, search: str | None = None, limit: int = 100

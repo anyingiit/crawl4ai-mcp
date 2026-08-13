@@ -9,8 +9,22 @@ import httpx
 from bs4 import BeautifulSoup
 from crawl4ai.async_url_seeder import COLLINFO_URL, AsyncUrlSeeder
 
-from crawl4ai_mcp.egress import PinnedEgressProxy, UrlPolicy
-from crawl4ai_mcp.models import ScrapeOutcome, Tier
+from crawl4ai_mcp.egress import (
+    Origin,
+    PinnedEgressProxy,
+    UrlPolicy,
+    UrlPolicyError,
+    normalized_origin,
+    parse_public_url,
+    same_origin,
+)
+from crawl4ai_mcp.models import (
+    CrawlPage,
+    CrawlResponse,
+    CrawlStats,
+    ScrapeOutcome,
+    Tier,
+)
 
 MAX_MAP_URLS = 100
 MAX_CRAWL_PAGES = 100
@@ -149,7 +163,7 @@ async def map_urls(
 
 
 def extract_links(
-    html: str, base_url: str, origin: str, include_pattern: str | None = None
+    html: str, base_url: str, origin: Origin, include_pattern: str | None = None
 ) -> list[str]:
     links: list[str] = []
     soup = BeautifulSoup(html, "lxml")
@@ -157,24 +171,17 @@ def extract_links(
         href = anchor["href"].strip()
         if not href or href.startswith(("javascript:", "mailto:", "tel:", "#")):
             continue
-        absolute = _without_fragment(urljoin(base_url, href))
-        if _hostname(absolute) != origin:
+        absolute = urljoin(base_url, href)
+        try:
+            validated = parse_public_url(absolute)
+        except UrlPolicyError:
             continue
-        if include_pattern and not fnmatch(absolute, include_pattern):
+        if validated.origin != origin:
             continue
-        links.append(absolute)
+        if include_pattern and not fnmatch(validated.url, include_pattern):
+            continue
+        links.append(validated.url)
     return links
-
-
-async def _page_html(engine, page_url: str) -> str:
-    provider = engine.providers.get(Tier.HTTP)
-    if provider is None:
-        return ""
-    try:
-        fetched = await provider.fetch(page_url)
-        return fetched.html
-    except Exception:
-        return ""
 
 
 async def crawl_site(
@@ -183,27 +190,49 @@ async def crawl_site(
     max_depth: int = 2,
     include_pattern: str | None = None,
     engine=None,
-) -> list[ScrapeOutcome]:
+    policy: UrlPolicy | None = None,
+) -> CrawlResponse:
     if not 1 <= max_pages <= MAX_CRAWL_PAGES:
         raise ValueError(f"max_pages must be between 1 and {MAX_CRAWL_PAGES}")
     if not 1 <= max_depth <= MAX_CRAWL_DEPTH:
         raise ValueError(f"max_depth must be between 1 and {MAX_CRAWL_DEPTH}")
 
-    origin = _hostname(url)
+    origin = normalized_origin(url)
+    if policy is not None:
+        await policy.resolve(url)
+
     queue: deque[tuple[str, int]] = deque([(url, 0)])
     visited: set[str] = set()
-    results: list[ScrapeOutcome] = []
-    while queue and len(results) < max_pages:
+    pages: list[CrawlPage] = []
+    started = time.monotonic()
+    max_depth_reached = 0
+    while queue and len(pages) < max_pages:
         page_url, depth = queue.popleft()
         if page_url in visited:
             continue
         visited.add(page_url)
-        result = await engine.scrape(page_url)
-        results.append(result)
-        if depth >= max_depth or result.response.status != "success":
+        outcome: ScrapeOutcome = await engine.scrape(page_url)
+        pages.append(CrawlPage(url=page_url, response=outcome.response))
+        max_depth_reached = max(max_depth_reached, depth)
+        if depth >= max_depth or outcome.response.status != "success":
             continue
-        html = await _page_html(engine, page_url)
-        for link in extract_links(html, page_url, origin, include_pattern):
-            if link not in visited and link not in {item[0] for item in queue}:
+        if outcome.raw_html is None or not same_origin(outcome.effective_url, url):
+            continue
+        queued = {item[0] for item in queue}
+        for link in extract_links(
+            outcome.raw_html, outcome.effective_url, origin, include_pattern
+        ):
+            if link not in visited and link not in queued:
                 queue.append((link, depth + 1))
-    return results
+    stats = CrawlStats(
+        attempted_pages=len(pages),
+        successful_pages=sum(
+            page.response.status == "success" for page in pages
+        ),
+        failed_pages=sum(
+            page.response.status != "success" for page in pages
+        ),
+        max_depth_reached=max_depth_reached,
+        elapsed_ms=int((time.monotonic() - started) * 1000),
+    )
+    return CrawlResponse(pages=pages, stats=stats)

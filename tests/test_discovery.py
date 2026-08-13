@@ -5,9 +5,16 @@ import pytest
 from crawl4ai.async_configs import ProxyConfig
 from crawl4ai.async_url_seeder import COLLINFO_URL
 from crawl4ai_mcp.cascade import CascadeEngine
-from crawl4ai_mcp.discovery import PinnedUrlSeeder, crawl_site, map_urls
-from crawl4ai_mcp.egress import UrlPolicy, UrlPolicyError
-from crawl4ai_mcp.models import CostKind, FetchResult, ProviderAvailability, Tier
+from crawl4ai_mcp.discovery import PinnedUrlSeeder, crawl_site, extract_links, map_urls
+from crawl4ai_mcp.egress import Origin, UrlPolicy, UrlPolicyError
+from crawl4ai_mcp.models import (
+    CostKind,
+    FetchResult,
+    ProviderAvailability,
+    ScrapeOutcome,
+    ScrapeResponse,
+    Tier,
+)
 from crawl4ai_mcp.policy import PolicyStore
 
 
@@ -312,6 +319,77 @@ def make_site_engine(site, calls, rendered=None):
     return CascadeEngine(providers, None, threshold=200)
 
 
+class ScriptedEngine:
+    def __init__(self, outcomes):
+        self.outcomes = dict(outcomes)
+        self.calls = []
+
+    async def scrape(self, url, maximum=Tier.FIRECRAWL, force=None):
+        self.calls.append(url)
+        return self.outcomes[url]
+
+
+def successful_outcome(url, raw_html="", effective_url=None, markdown="# ok"):
+    response = ScrapeResponse(
+        url=url,
+        status="success",
+        content=markdown,
+        tier_used="http",
+        cost_kind=CostKind.FREE,
+        elapsed_ms=1,
+    )
+    return ScrapeOutcome(
+        response=response,
+        raw_html=raw_html,
+        effective_url=effective_url or url,
+    )
+
+
+def rendered_root_and_child_outcomes():
+    return {
+        "https://example.com/": successful_outcome(
+            "https://example.com/", raw_html="<a href='/rendered'>x</a>"
+        ),
+        "https://example.com/rendered": successful_outcome(
+            "https://example.com/rendered", raw_html="<main>rendered</main>"
+        ),
+    }
+
+
+def cross_origin_redirect_outcome():
+    return {
+        "https://example.com/": successful_outcome(
+            "https://example.com/",
+            raw_html="<a href='/landed'>x</a>",
+            effective_url="https://evil.example/landed",
+        ),
+    }
+
+
+@pytest.mark.asyncio
+async def test_crawl_extracts_links_from_successful_rendered_response_without_refetch():
+    engine = ScriptedEngine(rendered_root_and_child_outcomes())
+    crawl = await crawl_site("https://example.com/", engine=engine, policy=public_policy(), max_depth=1)
+    assert [page.url for page in crawl.pages] == [
+        "https://example.com/", "https://example.com/rendered",
+    ]
+    assert engine.calls == ["https://example.com/", "https://example.com/rendered"]
+
+
+def test_extract_links_rejects_scheme_port_and_non_http_changes():
+    html = '<a href="https://example.com:443/ok">ok</a><a href="http://example.com/no">no</a><a href="https://example.com:444/no">no</a><a href="file:///etc/passwd">no</a>'
+    assert extract_links(html, "https://example.com/root", Origin("https", "example.com", 443)) == [
+        "https://example.com/ok"
+    ]
+
+
+@pytest.mark.asyncio
+async def test_crawl_does_not_follow_links_after_cross_origin_redirect():
+    engine = ScriptedEngine(cross_origin_redirect_outcome())
+    crawl = await crawl_site("https://example.com/", engine=engine, policy=public_policy())
+    assert len(crawl.pages) == 1
+
+
 @pytest.fixture
 async def policy_store(tmp_path):
     store = await PolicyStore.open(tmp_path / "policy.db")
@@ -332,8 +410,8 @@ async def test_crawl_site_bfs_dedup_origin_and_cycle(policy_store):
     calls = []
     engine = make_site_engine(SITE, calls)
     engine.policy = policy_store
-    results = await crawl_site("http://localhost:9000/", engine=engine, max_pages=10, max_depth=2)
-    scraped = [result.response.url for result in results]
+    crawl = await crawl_site("http://localhost:9000/", engine=engine, max_pages=10, max_depth=2)
+    scraped = [page.url for page in crawl.pages]
     assert scraped == [
         "http://localhost:9000/",
         "http://localhost:9000/a",
@@ -341,6 +419,10 @@ async def test_crawl_site_bfs_dedup_origin_and_cycle(policy_store):
         "http://localhost:9000/c",
     ]
     assert not any("off.example" in url for url in scraped)
+    assert crawl.stats.attempted_pages == 4
+    assert crawl.stats.successful_pages == 4
+    assert crawl.stats.failed_pages == 0
+    assert crawl.stats.max_depth_reached == 2
 
 
 @pytest.mark.asyncio
@@ -348,13 +430,14 @@ async def test_crawl_site_respects_max_pages_and_max_depth(policy_store):
     calls = []
     engine = make_site_engine(SITE, calls)
     engine.policy = policy_store
-    results = await crawl_site("http://localhost:9000/", engine=engine, max_pages=2, max_depth=5)
-    assert [r.response.url for r in results] == ["http://localhost:9000/", "http://localhost:9000/a"]
+    crawl = await crawl_site("http://localhost:9000/", engine=engine, max_pages=2, max_depth=5)
+    assert [page.url for page in crawl.pages] == ["http://localhost:9000/", "http://localhost:9000/a"]
+    assert crawl.stats.max_depth_reached == 1
     calls = []
     engine2 = make_site_engine(SITE, calls)
     engine2.policy = policy_store
-    results = await crawl_site("http://localhost:9000/", engine=engine2, max_pages=10, max_depth=1)
-    assert [r.response.url for r in results] == ["http://localhost:9000/", "http://localhost:9000/a", "http://localhost:9000/b"]
+    crawl = await crawl_site("http://localhost:9000/", engine=engine2, max_pages=10, max_depth=1)
+    assert [page.url for page in crawl.pages] == ["http://localhost:9000/", "http://localhost:9000/a", "http://localhost:9000/b"]
 
 
 @pytest.mark.asyncio
@@ -375,11 +458,12 @@ async def test_crawl_site_first_success_sets_tier_for_rest(policy_store):
         rendered={"/": "<main>Long rendered root content with links</main>"},
     )
     engine.policy = policy_store
-    results = await crawl_site("http://localhost:9000/", engine=engine, max_pages=10, max_depth=2)
-    assert results[0].response.tier_used == "stealth"
+    crawl = await crawl_site("http://localhost:9000/", engine=engine, max_pages=10, max_depth=2)
+    assert crawl.pages[0].response.tier_used == "stealth"
     first_page_calls = list(calls)
     assert first_page_calls[:2] == [Tier.HTTP, Tier.STEALTH]
+    assert len(calls) == 2
     calls.clear()
-    results = await crawl_site("http://localhost:9000/b", engine=engine, max_pages=2, max_depth=1)
+    crawl = await crawl_site("http://localhost:9000/b", engine=engine, max_pages=2, max_depth=1)
     assert calls[0] == Tier.STEALTH
-    assert results[0].response.tier_used == "stealth"
+    assert crawl.pages[0].response.tier_used == "stealth"

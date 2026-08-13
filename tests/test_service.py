@@ -179,6 +179,27 @@ async def test_service_rejects_private_url_before_policy_lookup(config):
 
 
 @pytest.mark.asyncio
+async def test_service_crawl_returns_pages_and_stats_without_raw_html(config):
+    providers = {Tier.HTTP: StubProvider(Tier.HTTP)}
+    service = await make_service(config, providers=providers)
+    service._url_policy = public_policy()
+    try:
+        payload = await service.crawl("https://example.com/", max_pages=2, max_depth=1)
+        assert set(payload) == {"pages", "stats"}
+        stats = payload["stats"]
+        assert stats["attempted_pages"] == 1
+        assert stats["successful_pages"] == 1
+        assert stats["failed_pages"] == 0
+        assert stats["max_depth_reached"] == 0
+        assert stats["elapsed_ms"] >= 0
+        assert payload["pages"][0]["url"] == "https://example.com/"
+        assert payload["pages"][0]["response"]["status"] == "success"
+        assert "raw_html" not in str(payload)
+    finally:
+        await service.close()
+
+
+@pytest.mark.asyncio
 async def test_diagnose_reports_expected_sections(config):
     providers = {Tier.HTTP: StubProvider(Tier.HTTP)}
     service = await make_service(config, providers=providers)

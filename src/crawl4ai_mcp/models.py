@@ -91,6 +91,24 @@ class ScrapeOutcome:
     effective_url: str
 
 
+class CrawlPage(BaseModel):
+    url: str
+    response: ScrapeResponse
+
+
+class CrawlStats(BaseModel):
+    attempted_pages: int
+    successful_pages: int
+    failed_pages: int
+    max_depth_reached: int
+    elapsed_ms: int
+
+
+class CrawlResponse(BaseModel):
+    pages: list[CrawlPage] = Field(default_factory=list)
+    stats: CrawlStats
+
+
 class ProviderAvailability(BaseModel):
     enabled: bool
     ready: bool

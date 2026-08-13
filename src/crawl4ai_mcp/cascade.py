@@ -120,7 +120,9 @@ class CascadeEngine:
                     attempts=attempts,
                 )
                 return ScrapeOutcome(
-                    response=response, raw_html=None, effective_url=fetched.url
+                    response=response,
+                    raw_html=fetched.html,
+                    effective_url=fetched.redirected_url or fetched.url,
                 )
             if decision == Decision.TERMINAL:
                 response = ScrapeResponse(

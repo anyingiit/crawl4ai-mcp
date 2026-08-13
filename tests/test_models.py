@@ -82,6 +82,33 @@ def test_scrape_response_serializes_lowercase_tier_names():
     assert payload["attempts"][0]["tier"] == "undetected"
 
 
+def successful_outcome(
+    url: str = "https://example.com/",
+    markdown: str = "# ok",
+    raw_html: str = "<main>ok</main>",
+    effective_url: str | None = None,
+) -> ScrapeOutcome:
+    response = ScrapeResponse(
+        url=url,
+        status="success",
+        content=markdown,
+        tier_used="http",
+        cost_kind=CostKind.FREE,
+        elapsed_ms=1,
+    )
+    return ScrapeOutcome(
+        response=response,
+        raw_html=raw_html,
+        effective_url=effective_url or url,
+    )
+
+
+def test_scrape_outcome_keeps_raw_html_out_of_external_response():
+    outcome = successful_outcome(raw_html="<a href='/rendered'>x</a>")
+    assert outcome.raw_html
+    assert "raw_html" not in outcome.response.model_dump(mode="json")
+
+
 def test_scrape_outcome_is_frozen_and_slotted():
     response = ScrapeResponse(
         url="https://example.com",
