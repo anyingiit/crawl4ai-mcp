@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+from enum import StrEnum
 
 _NET_ERROR_MARKERS = (
     "net::ERR_NAME_NOT_RESOLVED",
@@ -21,9 +22,20 @@ _NET_ERROR_MARKERS = (
     "net::ERR_INTERNET_DISCONNECTED",
 )
 
+_NAVIGATION_WRAPPER = "Failed on navigating ACS-GOTO"
+
 _TIMEOUT_PATTERN = re.compile(r"timeout(?: of)? \d+ ?ms exceeded", re.IGNORECASE)
 
 _timeout_types: tuple[type, ...] | None = None
+
+
+class FetchStage(StrEnum):
+    NAVIGATION = "navigation"
+    CONTEXT_CREATION = "context_creation"
+    GUARD_INSTALL = "guard_install"
+    PAGE_CREATION = "page_creation"
+    CONTENT = "content"
+    LAUNCH = "launch"
 
 
 def _playwright_timeout_types() -> tuple[type, ...]:
@@ -40,19 +52,39 @@ def _playwright_timeout_types() -> tuple[type, ...]:
     return _timeout_types
 
 
-def browser_network_error(exc: BaseException) -> bool:
-    """True when a browser fetch failure is a target-network failure.
+def _has_net_marker(message: str) -> bool:
+    return any(marker in message for marker in _NET_ERROR_MARKERS)
 
-    Matches stable Playwright/Patchright markers: navigation timeout,
-    DNS resolution, connection refused/reset/closed, TLS connection
-    failures, and unreachable hosts. Launch failures, context or route
-    installation failures, browser/protocol crashes unrelated to the
-    target connection, and malformed results return False so they fall
-    through as ordinary provider failures.
+
+def browser_network_error(
+    exc: BaseException,
+    *,
+    operation: FetchStage,
+    wrapped: bool = False,
+) -> bool:
+    """Classify a browser fetch failure as target-network.
+
+    Only the navigation stage may ever classify. Non-navigation stages
+    (context creation, guard install, page creation, content, launch)
+    always return False so provider-internal timeouts remain
+    fallback-eligible.
+
+    Direct ``page.goto`` evidence (``wrapped=False``) accepts
+    Playwright/Patchright timeout types and concrete ``net::`` markers.
+
+    With ``wrapped=True`` (crawl4ai ``arun``, which wraps many stages),
+    only the stable ``Failed on navigating ACS-GOTO`` wrapper counts:
+    concrete net markers or a navigation timeout inside that wrapper.
+    A bare Playwright/Patchright TimeoutError or a generic
+    ``Timeout Nms exceeded`` message without that wrapper stays False.
     """
+    if operation is not FetchStage.NAVIGATION:
+        return False
+    message = str(exc)
+    if _NAVIGATION_WRAPPER in message:
+        return _has_net_marker(message) or _TIMEOUT_PATTERN.search(message) is not None
+    if wrapped:
+        return False
     if isinstance(exc, _playwright_timeout_types()):
         return True
-    message = str(exc)
-    if _TIMEOUT_PATTERN.search(message):
-        return True
-    return any(marker in message for marker in _NET_ERROR_MARKERS)
+    return _has_net_marker(message)

@@ -3,6 +3,7 @@ import ipaddress
 
 import pytest
 from crawl4ai.async_configs import ProxyConfig
+from playwright._impl._errors import TimeoutError as PlaywrightTimeoutError
 
 from crawl4ai_mcp.egress import BrowserRequestGuard, UpstreamProxy, UrlPolicy
 from crawl4ai_mcp.models import CostKind, Tier
@@ -434,6 +435,52 @@ async def test_launch_failure_is_not_network_error(fake_clock):
     FakeCrawler.arun = launch_arun
     try:
         result = await provider.fetch("https://example.com/")
+        assert result.network_error is None
+        assert result.error is not None
+    finally:
+        FakeCrawler.arun = original_arun
+        await provider.close()
+
+
+@pytest.mark.asyncio
+async def test_bare_timeout_from_arun_is_not_network_error(fake_clock):
+    factory = FakeCrawlerFactory()
+    provider = BrowserProvider(
+        tier=Tier.STEALTH, factory=factory, idle_seconds=180,
+        semaphore=asyncio.Semaphore(2), clock=fake_clock,
+        egress_proxy=FakePinnedProxy(), request_guard=FakeRequestGuard(),
+    )
+    original_arun = FakeCrawler.arun
+
+    async def timeout_arun(self, url, config=None):
+        raise RuntimeError("Timeout 60000ms exceeded.")
+
+    FakeCrawler.arun = timeout_arun
+    try:
+        result = await provider.fetch("https://slow.example/")
+        assert result.network_error is None
+        assert result.error is not None
+    finally:
+        FakeCrawler.arun = original_arun
+        await provider.close()
+
+
+@pytest.mark.asyncio
+async def test_bare_playwright_timeout_from_arun_is_not_network_error(fake_clock):
+    factory = FakeCrawlerFactory()
+    provider = BrowserProvider(
+        tier=Tier.STEALTH, factory=factory, idle_seconds=180,
+        semaphore=asyncio.Semaphore(2), clock=fake_clock,
+        egress_proxy=FakePinnedProxy(), request_guard=FakeRequestGuard(),
+    )
+    original_arun = FakeCrawler.arun
+
+    async def timeout_arun(self, url, config=None):
+        raise PlaywrightTimeoutError("Timeout 60000ms exceeded.")
+
+    FakeCrawler.arun = timeout_arun
+    try:
+        result = await provider.fetch("https://slow.example/")
         assert result.network_error is None
         assert result.error is not None
     finally:

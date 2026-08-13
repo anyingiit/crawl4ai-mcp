@@ -15,7 +15,7 @@ from crawl4ai.browser_adapter import UndetectedAdapter
 from crawl4ai_mcp.egress import BrowserRequestGuard, PinnedEgressProxy, UpstreamProxy
 from crawl4ai_mcp.models import CostKind, FetchResult, ProviderAvailability, Tier
 from crawl4ai_mcp.providers.base import failed_result
-from crawl4ai_mcp.providers.browser_errors import browser_network_error
+from crawl4ai_mcp.providers.browser_errors import FetchStage, browser_network_error
 
 
 def _stealth_config() -> BrowserConfig:
@@ -132,7 +132,13 @@ class BrowserProvider:
                 )
             except Exception as exc:
                 network_error = (
-                    "browser_navigation_failed" if browser_network_error(exc) else None
+                    "browser_navigation_failed"
+                    if browser_network_error(
+                        exc,
+                        operation=FetchStage.NAVIGATION,
+                        wrapped=True,
+                    )
+                    else None
                 )
                 return failed_result(
                     url, self.tier, self.cost_kind, str(exc), started,

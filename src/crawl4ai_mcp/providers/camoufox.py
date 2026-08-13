@@ -7,7 +7,7 @@ from typing import Callable
 from crawl4ai_mcp.egress import BrowserRequestGuard, PinnedEgressProxy
 from crawl4ai_mcp.models import CostKind, FetchResult, ProviderAvailability, Tier
 from crawl4ai_mcp.providers.base import failed_result
-from crawl4ai_mcp.providers.browser_errors import browser_network_error
+from crawl4ai_mcp.providers.browser_errors import FetchStage, browser_network_error
 
 
 async def _default_launch():
@@ -82,45 +82,67 @@ class CamoufoxProvider:
                     return failed_result(
                         url, self.tier, self.cost_kind, str(exc), started
                     )
-            context = None
-            try:
-                endpoint = self.egress_proxy.endpoint()
-                context = await self._session.new_context(
-                    proxy={"server": endpoint.server}
-                )
-                await self.request_guard.install(context)
-                page = await context.new_page()
-                response = await page.goto(
-                    url, wait_until="domcontentloaded", timeout=60_000
-                )
-                try:
-                    await page.wait_for_load_state("networkidle", timeout=5_000)
-                except Exception:
-                    pass
-                html = await page.content()
-                self._last_used = self._clock()
-                return FetchResult(
-                    url=url,
-                    tier=self.tier,
-                    cost_kind=self.cost_kind,
-                    status_code=response.status if response is not None else None,
-                    html=html,
-                    elapsed_ms=int((time.monotonic() - started) * 1000),
-                )
-            except Exception as exc:
+
+            def fail(exc: Exception, *, network: bool = False) -> FetchResult:
                 network_error = (
-                    "browser_navigation_failed" if browser_network_error(exc) else None
+                    "browser_navigation_failed"
+                    if network
+                    and browser_network_error(
+                        exc, operation=FetchStage.NAVIGATION
+                    )
+                    else None
                 )
                 return failed_result(
                     url, self.tier, self.cost_kind, str(exc), started,
                     network_error=network_error,
                 )
+
+            context = None
+            try:
+                try:
+                    endpoint = self.egress_proxy.endpoint()
+                    context = await self._session.new_context(
+                        proxy={"server": endpoint.server}
+                    )
+                except Exception as exc:
+                    return fail(exc)
+                try:
+                    await self.request_guard.install(context)
+                except Exception as exc:
+                    return fail(exc)
+                try:
+                    page = await context.new_page()
+                except Exception as exc:
+                    return fail(exc)
+                try:
+                    response = await page.goto(
+                        url, wait_until="domcontentloaded", timeout=60_000
+                    )
+                except Exception as exc:
+                    return fail(exc, network=True)
+                try:
+                    await page.wait_for_load_state("networkidle", timeout=5_000)
+                except Exception:
+                    pass
+                try:
+                    html = await page.content()
+                except Exception as exc:
+                    return fail(exc)
             finally:
                 if context is not None:
                     try:
                         await context.close()
                     except Exception:
                         pass
+            self._last_used = self._clock()
+            return FetchResult(
+                url=url,
+                tier=self.tier,
+                cost_kind=self.cost_kind,
+                status_code=response.status if response is not None else None,
+                html=html,
+                elapsed_ms=int((time.monotonic() - started) * 1000),
+            )
 
     async def reap_idle(self, now: float | None = None) -> None:
         now = self._clock() if now is None else now

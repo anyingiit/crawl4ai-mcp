@@ -1,6 +1,9 @@
 import asyncio
+
 import pytest
 from crawl4ai.async_configs import ProxyConfig
+from playwright._impl._errors import TimeoutError as PlaywrightTimeoutError
+
 from crawl4ai_mcp.models import CostKind, Tier
 from crawl4ai_mcp.providers.camoufox import CamoufoxProvider
 
@@ -252,7 +255,7 @@ async def test_camoufox_navigation_timeout_is_classified():
     original_goto = FakePage.goto
 
     async def timeout_goto(self, url, **kwargs):
-        raise RuntimeError("Timeout 60000ms exceeded.")
+        raise PlaywrightTimeoutError("Timeout 60000ms exceeded.")
 
     FakePage.goto = timeout_goto
     try:
@@ -260,6 +263,82 @@ async def test_camoufox_navigation_timeout_is_classified():
         assert result.network_error is not None
     finally:
         FakePage.goto = original_goto
+        await provider.close()
+
+
+@pytest.mark.asyncio
+async def test_camoufox_context_creation_timeout_is_provider_failure():
+    launcher = FakeLauncher()
+    provider = make_provider(launcher=launcher)
+    original_new_context = FakeSession.new_context
+
+    async def timeout_new_context(self, **kwargs):
+        raise PlaywrightTimeoutError("Timeout 60000ms exceeded.")
+
+    FakeSession.new_context = timeout_new_context
+    try:
+        result = await provider.fetch("https://example.com/")
+        assert result.network_error is None
+        assert result.error is not None
+    finally:
+        FakeSession.new_context = original_new_context
+        await provider.close()
+
+
+@pytest.mark.asyncio
+async def test_camoufox_guard_install_timeout_is_provider_failure():
+    launcher = FakeLauncher()
+    provider = make_provider(launcher=launcher)
+    original_install = FakeRequestGuard.install
+
+    async def timeout_install(self, context):
+        raise PlaywrightTimeoutError("Timeout 60000ms exceeded.")
+
+    FakeRequestGuard.install = timeout_install
+    try:
+        result = await provider.fetch("https://example.com/")
+        assert result.network_error is None
+        assert result.error is not None
+    finally:
+        FakeRequestGuard.install = original_install
+        await provider.close()
+
+
+@pytest.mark.asyncio
+async def test_camoufox_page_creation_timeout_is_provider_failure():
+    launcher = FakeLauncher()
+    provider = make_provider(launcher=launcher)
+    original_new_page = FakeContext.new_page
+
+    async def timeout_new_page(self):
+        raise PlaywrightTimeoutError("Timeout 60000ms exceeded.")
+
+    FakeContext.new_page = timeout_new_page
+    try:
+        result = await provider.fetch("https://example.com/")
+        assert result.network_error is None
+        assert result.error is not None
+    finally:
+        FakeContext.new_page = original_new_page
+        await provider.close()
+
+
+@pytest.mark.asyncio
+async def test_camoufox_content_timeout_is_provider_failure():
+    launcher = FakeLauncher()
+    provider = make_provider(launcher=launcher)
+    original_content = FakePage.content
+
+    async def timeout_content(self):
+        raise PlaywrightTimeoutError("Timeout 60000ms exceeded.")
+
+    FakePage.content = timeout_content
+    try:
+        result = await provider.fetch("https://example.com/")
+        assert result.network_error is None
+        assert result.error is not None
+    finally:
+        FakePage.content = original_content
         await provider.close()
 
 

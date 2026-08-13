@@ -8,7 +8,9 @@ from playwright._impl._errors import (
     TimeoutError as PlaywrightTimeoutError,
 )
 
-from crawl4ai_mcp.providers.browser_errors import browser_network_error
+from crawl4ai_mcp.providers.browser_errors import FetchStage, browser_network_error
+
+NAV = FetchStage.NAVIGATION
 
 
 @pytest.mark.parametrize(
@@ -32,36 +34,98 @@ from crawl4ai_mcp.providers.browser_errors import browser_network_error
     ],
 )
 def test_target_network_markers_are_classified(message):
-    assert browser_network_error(RuntimeError(message)) is True
+    assert browser_network_error(RuntimeError(message), operation=NAV) is True
 
 
-def test_crawl4ai_wrapped_navigation_error_is_classified():
+def test_crawl4ai_wrapped_navigation_marker_is_classified():
     exc = RuntimeError(
         "Failed on navigating ACS-GOTO:\n"
         "net::ERR_CONNECTION_RESET at https://example.com/"
     )
-    assert browser_network_error(exc) is True
+    assert browser_network_error(exc, operation=NAV, wrapped=True) is True
+    assert browser_network_error(exc, operation=NAV) is True
 
 
-@pytest.mark.parametrize(
-    "message",
-    [
-        "Failed on navigating ACS-GOTO:\nTimeout 60000ms exceeded.",
-        "Failed on navigating ACS-GOTO:\nNavigation timeout of 30000 ms exceeded",
-    ],
-)
-def test_navigation_timeout_messages_are_classified(message):
-    assert browser_network_error(RuntimeError(message)) is True
+def test_crawl4ai_wrapped_navigation_timeout_is_classified():
+    exc = RuntimeError("Failed on navigating ACS-GOTO:\nTimeout 60000ms exceeded.")
+    assert browser_network_error(exc, operation=NAV, wrapped=True) is True
+    assert browser_network_error(exc, operation=NAV) is True
 
 
 def test_playwright_and_patchright_timeout_types_are_classified():
-    assert browser_network_error(PlaywrightTimeoutError("Timeout 60000ms exceeded.")) is True
-    assert browser_network_error(PatchrightTimeoutError("Timeout 60000ms exceeded.")) is True
+    exc = PlaywrightTimeoutError("Timeout 60000ms exceeded.")
+    assert browser_network_error(exc, operation=NAV) is True
+    exc = PatchrightTimeoutError("Timeout 60000ms exceeded.")
+    assert browser_network_error(exc, operation=NAV) is True
 
 
 def test_playwright_error_with_marker_is_classified():
     exc = PlaywrightError("net::ERR_CONNECTION_REFUSED at https://example.com/")
-    assert browser_network_error(exc) is True
+    assert browser_network_error(exc, operation=NAV) is True
+
+
+def test_wrapped_mode_requires_navigation_wrapper():
+    assert (
+        browser_network_error(
+            PlaywrightTimeoutError("Timeout 60000ms exceeded."),
+            operation=NAV, wrapped=True,
+        )
+        is False
+    )
+    assert (
+        browser_network_error(
+            RuntimeError("Timeout 60000ms exceeded."), operation=NAV, wrapped=True
+        )
+        is False
+    )
+    assert (
+        browser_network_error(
+            RuntimeError("Navigation timeout of 30000 ms exceeded"),
+            operation=NAV, wrapped=True,
+        )
+        is False
+    )
+    assert (
+        browser_network_error(
+            RuntimeError("render stage failed"), operation=NAV, wrapped=True
+        )
+        is False
+    )
+
+
+def test_bare_timeout_message_without_navigation_context_is_not_classified():
+    assert (
+        browser_network_error(RuntimeError("Timeout 60000ms exceeded."), operation=NAV)
+        is False
+    )
+    assert (
+        browser_network_error(
+            RuntimeError("Navigation timeout of 30000 ms exceeded"), operation=NAV
+        )
+        is False
+    )
+
+
+@pytest.mark.parametrize(
+    "stage",
+    [
+        FetchStage.CONTEXT_CREATION,
+        FetchStage.GUARD_INSTALL,
+        FetchStage.PAGE_CREATION,
+        FetchStage.CONTENT,
+        FetchStage.LAUNCH,
+    ],
+)
+@pytest.mark.parametrize(
+    "exc",
+    [
+        RuntimeError("Timeout 60000ms exceeded."),
+        PlaywrightTimeoutError("Timeout 60000ms exceeded."),
+        RuntimeError("net::ERR_CONNECTION_REFUSED at https://example.com/"),
+    ],
+)
+def test_non_navigation_stages_are_never_target_network(stage, exc):
+    assert browser_network_error(exc, operation=stage) is False
 
 
 @pytest.mark.parametrize(
@@ -78,17 +142,17 @@ def test_playwright_error_with_marker_is_classified():
     ],
 )
 def test_provider_internal_failures_are_not_target_network(message):
-    assert browser_network_error(RuntimeError(message)) is False
+    assert browser_network_error(RuntimeError(message), operation=NAV) is False
 
 
 def test_target_closed_error_is_not_target_network():
-    assert browser_network_error(TargetClosedError()) is False
+    assert browser_network_error(TargetClosedError(), operation=NAV) is False
 
 
 def test_launch_failure_playwright_error_is_not_target_network():
     exc = PlaywrightError("Executable doesn't exist at /usr/lib/chromium/chrome")
-    assert browser_network_error(exc) is False
+    assert browser_network_error(exc, operation=NAV) is False
 
 
 def test_bare_asyncio_timeout_is_not_target_network():
-    assert browser_network_error(asyncio.TimeoutError()) is False
+    assert browser_network_error(asyncio.TimeoutError(), operation=NAV) is False
