@@ -119,6 +119,138 @@ async def test_close_order_reaper_then_providers_then_egress_then_policy(config)
     assert service.policy is None
 
 
+class _ServiceFakeClock:
+    def __init__(self, now: float = 0.0):
+        self.now = now
+
+    def __call__(self) -> float:
+        return self.now
+
+    def advance(self, seconds: float) -> None:
+        self.now += seconds
+
+
+class _ServiceFakeCrawler:
+    def __init__(self, factory):
+        self.factory = factory
+        self.closed = False
+
+    async def arun(self, url, config=None):
+        return _ServiceFakeContainer()
+
+    async def close(self):
+        self.factory.close_started.set()
+        if self.factory.close_gate is not None:
+            await self.factory.close_gate.wait()
+        self.closed = True
+        self.factory.closed += 1
+
+
+class _ServiceFakeContainer:
+    def __init__(self):
+        self._results = [
+            _ServiceFakeResult(
+                html="<main>" + "x" * 300 + "</main>",
+                success=True,
+            )
+        ]
+
+
+class _ServiceFakeResult:
+    def __init__(self, html, success):
+        self.html = html
+        self.status_code = 200
+        self.response_headers = {"content-type": "text/html"}
+        self.redirected_url = None
+        self.error_message = None
+        self.success = success
+
+
+class _ServiceFakeCrawlerFactory:
+    def __init__(self):
+        self.created = 0
+        self.closed = 0
+        self.close_started = asyncio.Event()
+        self.close_gate = None
+
+    def __call__(self):
+        self.created += 1
+        return _ServiceFakeCrawler(self)
+
+
+class _ServiceFakeEgressProxy:
+    def endpoint(self, upstream=None):
+        return None
+
+
+class _ServiceFakeGuard:
+    async def install(self, context):
+        pass
+
+    def begin_fetch(self):
+        return _ServiceFakeRecorder()
+
+    def bind_page(self, page):
+        pass
+
+
+class _ServiceFakeRecorder:
+    def blocked(self):
+        return []
+
+    def close(self):
+        pass
+
+
+@pytest.mark.asyncio
+async def test_service_close_cancels_reaper_stuck_in_idle_reap(config):
+    from crawl4ai_mcp.providers.browser import BrowserProvider
+
+    clock = _ServiceFakeClock()
+    factory = _ServiceFakeCrawlerFactory()
+    provider = BrowserProvider(
+        tier=Tier.STEALTH, factory=factory, idle_seconds=180,
+        semaphore=asyncio.Semaphore(2), clock=clock,
+        egress_proxy=_ServiceFakeEgressProxy(), request_guard=_ServiceFakeGuard(),
+    )
+    await provider.fetch("https://example.com/a")
+    clock.advance(181)
+    factory.close_gate = asyncio.Event()
+    service = CrawlService(
+        config,
+        providers={Tier.STEALTH: provider},
+        reaper_interval=0.01,
+    )
+    await service.start()
+    close_task = None
+    try:
+        await asyncio.wait_for(factory.close_started.wait(), timeout=2)
+        close_task = asyncio.create_task(service.close())
+        await asyncio.sleep(0.05)
+        assert not close_task.done()
+        factory.close_gate.set()
+        await asyncio.wait_for(close_task, timeout=2)
+        assert factory.closed == 1
+        assert provider._close_tasks == set()
+        assert service._close_events[0] == "_reaper_cancelled"
+        result = await provider.fetch("https://example.com/b")
+        assert result.error is not None and "closed" in (result.error or "")
+    finally:
+        if close_task is not None and not close_task.done():
+            close_task.cancel()
+        if service._reaper_task is not None and not service._reaper_task.done():
+            service._reaper_task.cancel()
+        await asyncio.gather(
+            *(
+                task
+                for task in (service._reaper_task, close_task)
+                if task is not None
+            ),
+            return_exceptions=True,
+        )
+        factory.close_gate.set()
+
+
 @pytest.mark.asyncio
 async def test_service_shares_one_url_policy_egress_proxy_and_guard(config):
     service = await make_service(config)

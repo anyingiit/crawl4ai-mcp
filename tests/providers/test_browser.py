@@ -1114,18 +1114,21 @@ async def test_aborted_subresource_alone_is_not_main_frame_policy_error(fake_clo
 
 
 @pytest.mark.asyncio
-async def test_browser_reap_cancellation_does_not_leak_crawler(provider, clock):
+async def test_browser_reap_cancellation_propagates_and_close_continues_owned(provider, clock):
     await provider.fetch("https://example.com/a")
     clock.advance(181)
     provider.factory.close_gate = asyncio.Event()
     reap = asyncio.create_task(provider.reap_idle())
     await provider.factory.close_started.wait()
     reap.cancel()
-    await reap
+    with pytest.raises(asyncio.CancelledError):
+        await reap
     assert provider.factory.closed == 0
+    assert provider._close_tasks
     provider.factory.close_gate.set()
     await asyncio.wait_for(provider.close(), timeout=5)
     assert provider.factory.closed == 1
+    assert provider._close_tasks == set()
 
 
 @pytest.mark.asyncio

@@ -231,10 +231,12 @@ class BrowserProvider:
             task = asyncio.create_task(self._close_crawler(crawler))
             self._close_tasks.add(task)
             task.add_done_callback(self._close_tasks.discard)
-        try:
-            await asyncio.shield(task)
-        except asyncio.CancelledError:
-            pass
+        # The resource close task is provider-owned and tracked in
+        # _close_tasks; shielding keeps it alive when the reaper's
+        # caller is cancelled. Cancellation must propagate from here so
+        # the service reaper exits promptly; provider.close() joins the
+        # shared close task.
+        await asyncio.shield(task)
 
     async def _close_crawler(self, crawler) -> None:
         try:

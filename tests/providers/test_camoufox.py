@@ -634,7 +634,7 @@ async def test_camoufox_context_failure_is_not_network_error():
 
 
 @pytest.mark.asyncio
-async def test_camoufox_reap_cancellation_does_not_leak_session(provider, gate, clock):
+async def test_camoufox_reap_cancellation_propagates_and_close_continues_owned(provider, gate, clock):
     fetch = asyncio.create_task(provider.fetch("https://example.com/a"))
     await provider.launcher.started.wait()
     gate.set()
@@ -644,11 +644,14 @@ async def test_camoufox_reap_cancellation_does_not_leak_session(provider, gate, 
     reap = asyncio.create_task(provider.reap_idle())
     await provider.launcher.close_started.wait()
     reap.cancel()
-    await reap
+    with pytest.raises(asyncio.CancelledError):
+        await reap
     assert provider.launcher.sessions[0].closed is False
+    assert provider._close_tasks
     provider.launcher.close_gate.set()
     await asyncio.wait_for(provider.close(), timeout=5)
     assert provider.launcher.sessions[0].closed is True
+    assert provider._close_tasks == set()
 
 
 @pytest.mark.asyncio
