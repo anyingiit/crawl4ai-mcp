@@ -1,0 +1,33 @@
+# Non-secret defaults for the crawl4ai-mcp service.
+# Copy to config.toml next to the service and edit as needed.
+# Secrets (API keys, proxy credentials) belong in .env, never here.
+
+bind_host = "127.0.0.1"
+bind_port = 11236
+
+# Visible-text length (after tag stripping) that counts as a successful page.
+visible_text_threshold = 200
+
+# Concurrency limits.
+http_concurrency = 8
+browser_concurrency = 2
+
+# Idle shutdown for browser tiers, in seconds.
+chromium_idle_seconds = 180
+camoufox_idle_seconds = 120
+
+# Domain policy memory.
+policy_decay_days = 7
+cooldown_seconds = 600
+
+# Which tiers are enabled. Disabling a tier makes it unavailable and the
+# cascade skips it.
+enabled_tiers = [
+    "http",
+    "stealth",
+    "undetected",
+    "camoufox",
+    "proxy",
+    "rayobyte",
+    "firecrawl",
+]
