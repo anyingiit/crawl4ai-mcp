@@ -1,0 +1,39 @@
+# Reproducible acceptance targets.
+# Markers are the exact strings observed with a real browser on 2026-08-13.
+# If a fixture contract changes upstream, update the marker and the dated note
+# rather than silently switching sites.
+
+[js_links]
+url = "https://web-scraping.dev/js-links"
+marker = "/js-links-target"
+note = "2026-08-13: JS-injected anchor observable in raw HTML, but the rendered page exposes < 200 visible chars, so it cannot classify as success at any tier. Kept for JS-injection smoke only; not a tier-1 success fixture."
+
+[js_quotes]
+url = "https://quotes.toscrape.com/js/"
+marker = "The world as we have created it is a process of our thinking"
+note = "2026-08-13: Tier 0 returns a JS shell (classifies needs_js); a real browser renders long quote text. Replaces web-scraping.dev/js-links as the tier-1/2 success fixture because that page now renders under the 200-char visible-text threshold."
+
+[antibot_easy]
+url = "https://web-scraping.dev/antibot/easy"
+marker = ""
+note = "2026-08-13: fixture currently returns 403 'You are a bot' (Reference ID AN71-B07-CH3CK) for every engine tested: Camoufox, stealth Chromium, and Firecrawl auto proxy. No success marker observable; do not use as a bypass-success target until the fixture clears."
+
+[classify_blocked]
+url = "https://web-scraping.dev/classify-test/blocked"
+marker = "challenge"
+note = "2026-08-13: deterministic 403 Cloudflare-style block; classifies as CLOUDFLARE via marker text."
+
+[server_error]
+url = "https://httpbingo.org/status/500"
+marker = ""
+note = "2026-08-13: deterministic 500 with no retry-after; classifies as FAILED and triggers cooldown. httpstat.us is unreachable (empty reply) and was abandoned."
+
+[unreachable_public]
+url = "http://192.88.99.1/"
+marker = ""
+note = "2026-08-13: deprecated 6to4 anycast address (RFC 7526). ipaddress.is_global() is true, so the URL policy admits it; no service listens on port 80, so the fetch fails by connection refusal within ~200 ms. Proves a target-network failure never reaches paid tiers."
+
+[proxy_ip_check]
+url = "https://api.ipify.org?format=json"
+marker = "\"ip\"\\s*:\\s*\"[0-9.]+\\s*\""
+note = "2026-08-13: marker is a regex matched against the JSON body; asserts the proxied response is the real IP endpoint, not an error page."
