@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import tomllib
+import warnings
 from pathlib import Path
 
 from pydantic import BaseModel, Field, field_validator
@@ -26,6 +27,7 @@ DEFAULT_DATABASE_PATH = Path("~/.local/state/crawl4ai-mcp/policy.db")
 class AppConfig(BaseModel):
     bind_host: str = "127.0.0.1"
     bind_port: int = 11236
+    extra_allowed_hosts: list[str] = Field(default_factory=list)
     database_path: Path = DEFAULT_DATABASE_PATH
     visible_text_threshold: int = 200
     http_concurrency: int = 8
@@ -68,6 +70,24 @@ class AppConfig(BaseModel):
         if value != "127.0.0.1":
             raise ValueError("service must bind to 127.0.0.1 only")
         return value
+
+    @field_validator("extra_allowed_hosts")
+    @classmethod
+    def validate_extra_allowed_hosts(cls, value: list[str]) -> list[str]:
+        stripped = []
+        for entry in value:
+            cleaned = entry.strip()
+            if not cleaned:
+                raise ValueError("extra_allowed_hosts entries must not be empty")
+            if cleaned == "*":
+                warnings.warn(
+                    "extra_allowed_hosts contains '*', which disables host "
+                    "origin protection",
+                    UserWarning,
+                    stacklevel=2,
+                )
+            stripped.append(cleaned)
+        return stripped
 
     @field_validator("enabled_tiers", mode="before")
     @classmethod

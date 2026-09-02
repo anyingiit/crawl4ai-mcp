@@ -98,3 +98,41 @@ def test_appconfig_accepts_partial_pair_for_availability_reporting():
         webshare_proxy_username="only-user",
     )
     assert config.webshare_proxy_username == "only-user"
+
+
+def test_extra_allowed_hosts_default_empty(tmp_path: Path):
+    path = tmp_path / "config.toml"
+    path.write_text("", encoding="utf-8")
+    config = load_config(path, env={})
+    assert config.extra_allowed_hosts == []
+
+
+def test_extra_allowed_hosts_loads_from_toml(tmp_path: Path):
+    path = tmp_path / "config.toml"
+    path.write_text(
+        'extra_allowed_hosts = ["*.ts.net", "my-host.example.com"]\n',
+        encoding="utf-8",
+    )
+    config = load_config(path, env={})
+    assert config.extra_allowed_hosts == ["*.ts.net", "my-host.example.com"]
+
+
+def test_extra_allowed_hosts_strips_whitespace(tmp_path: Path):
+    path = tmp_path / "config.toml"
+    path.write_text('extra_allowed_hosts = ["  *.ts.net  "]\n', encoding="utf-8")
+    config = load_config(path, env={})
+    assert config.extra_allowed_hosts == ["*.ts.net"]
+
+
+def test_extra_allowed_hosts_rejects_empty_entry(tmp_path: Path):
+    path = tmp_path / "config.toml"
+    path.write_text('extra_allowed_hosts = ["*.ts.net", "   "]\n', encoding="utf-8")
+    with pytest.raises(ValueError, match="empty"):
+        load_config(path, env={})
+
+
+def test_extra_allowed_hosts_wildcard_star_warns(tmp_path: Path):
+    path = tmp_path / "config.toml"
+    path.write_text('extra_allowed_hosts = ["*"]\n', encoding="utf-8")
+    with pytest.warns(UserWarning, match="host origin protection"):
+        load_config(path, env={})
