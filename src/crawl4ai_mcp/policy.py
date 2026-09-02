@@ -102,7 +102,7 @@ class PolicyStore:
             return Tier.HTTP
         best = Tier(row["best_tier"])
         if row["last_success_at"] is not None and now - row["last_success_at"] >= self.decay_days * DAY_SECONDS:
-            return max(Tier.HTTP, Tier(best - 1))
+            return Tier(max(Tier.HTTP, best - 1))
         return best
 
     async def record_success(self, url: str, tier: Tier, now: int | None = None) -> DomainPolicy:
