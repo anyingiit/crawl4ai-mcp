@@ -57,3 +57,20 @@ def test_main_loads_config_once_and_calls_run_server(monkeypatch, tmp_path):
     main_module.main()
     assert len(calls) == 1
     assert isinstance(calls[0], AppConfig)
+
+
+def test_run_server_appends_extra_allowed_hosts(monkeypatch, tmp_path):
+    config = AppConfig(
+        bind_host="127.0.0.1",
+        bind_port=12345,
+        database_path=tmp_path / "p.db",
+        extra_allowed_hosts=["*.ts.net"],
+    )
+    fake = FakeMCP()
+    monkeypatch.setattr(main_module, "create_server", lambda *_a, **_k: fake)
+    main_module.run_server(config, service=FakeService())
+    assert fake.run_kwargs["allowed_hosts"] == [
+        "127.0.0.1:12345",
+        "localhost:12345",
+        "*.ts.net",
+    ]
