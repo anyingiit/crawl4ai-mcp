@@ -36,6 +36,7 @@ def run_server(config: AppConfig, service: CrawlService | None = None) -> None:
         allowed_hosts=[
             f"{config.bind_host}:{config.bind_port}",
             f"localhost:{config.bind_port}",
+            *config.extra_allowed_hosts,
         ],
     )
 
