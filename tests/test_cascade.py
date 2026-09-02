@@ -215,6 +215,28 @@ async def test_second_request_starts_at_remembered_tier(engine_with_policy):
 
 
 @pytest.mark.asyncio
+async def test_decayed_http_policy_stays_on_http(tmp_path):
+    seven_days = 1_000 + 7 * 86_400
+    engine, policy = await make_engine(
+        tmp_path, {Tier.HTTP: success}, now=seven_days
+    )
+    await policy.record_success(
+        "https://example.com/a", Tier.HTTP, now=1_000
+    )
+
+    try:
+        outcome = await engine.scrape(
+            "https://example.com/b", maximum=Tier.HTTP
+        )
+    finally:
+        await policy.close()
+
+    assert outcome.response.status == "success"
+    assert outcome.response.tier_used == "http"
+    assert engine.calls == [Tier.HTTP]
+
+
+@pytest.mark.asyncio
 async def test_cooldown_prevents_any_provider_call(engine_in_cooldown):
     outcome = await engine_in_cooldown.scrape("https://bad.example/x")
     assert outcome.response.status == "cooldown"

@@ -69,6 +69,19 @@ async def test_policy_decays_one_tier_after_seven_days(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_policy_decay_keeps_http_at_lower_bound(tmp_path):
+    store = await PolicyStore.open(tmp_path / "policy.db", decay_days=7)
+    await store.record_success("https://example.com/a", Tier.HTTP, now=1_000)
+    seven_days = 1_000 + 7 * 86_400
+
+    assert await store.get_start_tier(
+        "https://example.com/b", now=seven_days
+    ) == Tier.HTTP
+
+    await store.close()
+
+
+@pytest.mark.asyncio
 async def test_failure_backoff_sequence_is_capped_at_24_hours(tmp_path):
     store = await PolicyStore.open(tmp_path / "policy.db")
     expected = [600, 3_600, 21_600, 86_400, 86_400]
