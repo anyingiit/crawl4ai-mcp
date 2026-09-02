@@ -34,6 +34,8 @@ def run_server(config: AppConfig, service: CrawlService | None = None) -> None:
         path="/mcp",
         host_origin_protection=True,
         allowed_hosts=[
+            "instance-20250526-0820.taila20d2.ts.net",
+            "instance-20250526-0820.taila20d2.ts.net:11237",
             f"{config.bind_host}:{config.bind_port}",
             f"localhost:{config.bind_port}",
         ],
