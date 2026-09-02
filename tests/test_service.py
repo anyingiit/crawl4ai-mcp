@@ -291,6 +291,29 @@ async def test_scrape_success_returns_structured_result(config):
 
 
 @pytest.mark.asyncio
+async def test_service_scrape_stale_http_policy_reaches_http(config):
+    import time
+
+    providers = {Tier.HTTP: StubProvider(Tier.HTTP)}
+    service = await make_service(config, providers=providers)
+    service._url_policy = public_policy()
+    try:
+        stale = int(time.time()) - 8 * 86_400
+        await service.policy.record_success(
+            "https://example.com/", Tier.HTTP, now=stale
+        )
+        payload = await service.scrape("https://example.com/", max_tier="http")
+        assert payload["status"] == "success"
+        assert payload["tier_used"] == "http"
+        assert payload["cost_kind"] == "free"
+        assert payload["content"] == "# Ok"
+        assert payload["attempts"][0]["tier"] == "http"
+        assert payload["attempts"][0]["decision"] == "success"
+    finally:
+        await service.close()
+
+
+@pytest.mark.asyncio
 async def test_service_rejects_private_url_before_policy_lookup(config):
     class BoomEngine:
         def __init__(self):
