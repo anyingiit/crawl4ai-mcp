@@ -24,6 +24,7 @@
 - `src/crawl4ai_mcp/policy.py:103-105` evaluates `Tier(best - 1)` before `max(...)`; when `best == Tier.HTTP`, Python evaluates `Tier(-1)` and raises `ValueError: -1 is not a valid Tier` before clamping can occur.
 - A direct policy-store reproduction with an eight-day-old `Tier.HTTP` success raises the issue's exact error at `policy.py:105`.
 - A live opencode MCP call with explicit `max_tier="http", force_tier="http"` passes because the forced path bypasses policy start-tier lookup, matching the report that `force_tier` works. This acceptance test is contract coverage only; it is not regression coverage for the stale-policy failure.
+- **Diagnosis boundary:** this fix addresses a confirmed defect that deterministically raises the exact `-1 is not a valid Tier` error when an expired `Tier.HTTP` memory is consulted. It does not claim to explain the reporter's observation that omitting `max_tier` succeeded: `CascadeEngine.scrape` looks up the starting tier (`cascade.py:89`) before applying `maximum`, so an expired HTTP memory raises the same `-1` error with or without an explicit `max_tier`. The explicit-vs-omitted discrepancy may instead reflect different policy state, domain, or service version at report time and is not explained by this root cause.
 
 ---
 
