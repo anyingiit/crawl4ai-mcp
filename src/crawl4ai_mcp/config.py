@@ -75,10 +75,10 @@ class AppConfig(BaseModel):
     @classmethod
     def validate_extra_allowed_hosts(cls, value: list[str]) -> list[str]:
         stripped = []
-        for entry in value:
+        for i, entry in enumerate(value):
             cleaned = entry.strip()
             if not cleaned:
-                raise ValueError("extra_allowed_hosts entries must not be empty")
+                raise ValueError(f"extra_allowed_hosts entry {i} must not be empty")
             if cleaned == "*":
                 warnings.warn(
                     "extra_allowed_hosts contains '*', which disables host "
