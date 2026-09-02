@@ -1,6 +1,7 @@
 .venv/
 .worktrees/
 .env
+config.toml
 __pycache__/
 *.pyc
 *.db
