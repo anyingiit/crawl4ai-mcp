@@ -1,0 +1,367 @@
+[
+  {
+    "name": "cf_upload",
+    "url": "https://developers.cloudflare.com/pages/get-started/direct-upload/",
+    "wall_seconds": 21.07,
+    "response": {
+      "url": "https://developers.cloudflare.com/pages/get-started/direct-upload/",
+      "status": "success",
+      "tier_used": "firecrawl",
+      "cost_kind": "firecrawl_credit",
+      "elapsed_ms": 21040,
+      "attempts": [
+        {
+          "tier": "http",
+          "decision": "cloudflare",
+          "cost_kind": "free",
+          "target_status_code": 200,
+          "provider_status_code": null,
+          "provider_error_kind": null,
+          "provider_error": null,
+          "elapsed_ms": 74,
+          "error": null
+        },
+        {
+          "tier": "stealth",
+          "decision": "provider_failure",
+          "cost_kind": "free",
+          "target_status_code": null,
+          "provider_status_code": null,
+          "provider_error_kind": "service",
+          "provider_error": "BrowserType.launch: Executable doesn't exist at /home/ubuntu/.cache/ms-playwright/chromium_headless_shell-1223/chrome-linux/headless_shell\n╔════════════════════════════════════════════════════════════╗\n║ Looks like Playwright was just installed or updated.       ║\n║ Please run the following command to download new browsers: ║\n║                                                            ║\n║     playwright install                                     ║\n║                                                            ║\n║ <3 Playwright Team                                         ║\n╚════════════════════════════════════════════════════════════╝",
+          "elapsed_ms": 619,
+          "error": "BrowserType.launch: Executable doesn't exist at /home/ubuntu/.cache/ms-playwright/chromium_headless_shell-1223/chrome-linux/headless_shell\n╔════════════════════════════════════════════════════════════╗\n║ Looks like Playwright was just installed or updated.       ║\n║ Please run the following command to download new browsers: ║\n║                                                            ║\n║     playwright install                                     ║\n║                                                            ║\n║ <3 Playwright Team                                         ║\n╚════════════════════════════════════════════════════════════╝"
+        },
+        {
+          "tier": "undetected",
+          "decision": "cloudflare",
+          "cost_kind": "free",
+          "target_status_code": 200,
+          "provider_status_code": null,
+          "provider_error_kind": null,
+          "provider_error": null,
+          "elapsed_ms": 1507,
+          "error": ""
+        },
+        {
+          "tier": "camoufox",
+          "decision": "cloudflare",
+          "cost_kind": "free",
+          "target_status_code": 200,
+          "provider_status_code": null,
+          "provider_error_kind": null,
+          "provider_error": null,
+          "elapsed_ms": 4974,
+          "error": null
+        },
+        {
+          "tier": "rayobyte",
+          "decision": "cloudflare",
+          "cost_kind": "rayobyte_credit",
+          "target_status_code": 200,
+          "provider_status_code": 200,
+          "provider_error_kind": null,
+          "provider_error": null,
+          "elapsed_ms": 12367,
+          "error": null
+        },
+        {
+          "tier": "firecrawl",
+          "decision": "success",
+          "cost_kind": "firecrawl_credit",
+          "target_status_code": 200,
+          "provider_status_code": 200,
+          "provider_error_kind": null,
+          "provider_error": null,
+          "elapsed_ms": 1499,
+          "error": null
+        }
+      ],
+      "cooldown_until": null,
+      "error": null,
+      "content_chars": 7961,
+      "expected_marker_found": true
+    }
+  },
+  {
+    "name": "cf_waiting",
+    "url": "https://developers.cloudflare.com/waiting-room/plans/",
+    "wall_seconds": 10.3,
+    "response": {
+      "url": "https://developers.cloudflare.com/waiting-room/plans/",
+      "status": "failed",
+      "tier_used": null,
+      "cost_kind": null,
+      "elapsed_ms": 10282,
+      "attempts": [
+        {
+          "tier": "http",
+          "decision": "cloudflare",
+          "cost_kind": "free",
+          "target_status_code": 200,
+          "provider_status_code": null,
+          "provider_error_kind": null,
+          "provider_error": null,
+          "elapsed_ms": 55,
+          "error": null
+        },
+        {
+          "tier": "stealth",
+          "decision": "provider_failure",
+          "cost_kind": "free",
+          "target_status_code": null,
+          "provider_status_code": null,
+          "provider_error_kind": "service",
+          "provider_error": "BrowserType.launch: Executable doesn't exist at /home/ubuntu/.cache/ms-playwright/chromium_headless_shell-1223/chrome-linux/headless_shell\n╔════════════════════════════════════════════════════════════╗\n║ Looks like Playwright was just installed or updated.       ║\n║ Please run the following command to download new browsers: ║\n║                                                            ║\n║     playwright install                                     ║\n║                                                            ║\n║ <3 Playwright Team                                         ║\n╚════════════════════════════════════════════════════════════╝",
+          "elapsed_ms": 516,
+          "error": "BrowserType.launch: Executable doesn't exist at /home/ubuntu/.cache/ms-playwright/chromium_headless_shell-1223/chrome-linux/headless_shell\n╔════════════════════════════════════════════════════════════╗\n║ Looks like Playwright was just installed or updated.       ║\n║ Please run the following command to download new browsers: ║\n║                                                            ║\n║     playwright install                                     ║\n║                                                            ║\n║ <3 Playwright Team                                         ║\n╚════════════════════════════════════════════════════════════╝"
+        },
+        {
+          "tier": "undetected",
+          "decision": "cloudflare",
+          "cost_kind": "free",
+          "target_status_code": 200,
+          "provider_status_code": null,
+          "provider_error_kind": null,
+          "provider_error": null,
+          "elapsed_ms": 660,
+          "error": ""
+        },
+        {
+          "tier": "camoufox",
+          "decision": "cloudflare",
+          "cost_kind": "free",
+          "target_status_code": 200,
+          "provider_status_code": null,
+          "provider_error_kind": null,
+          "provider_error": null,
+          "elapsed_ms": 2919,
+          "error": null
+        },
+        {
+          "tier": "rayobyte",
+          "decision": "cloudflare",
+          "cost_kind": "rayobyte_credit",
+          "target_status_code": 200,
+          "provider_status_code": 200,
+          "provider_error_kind": null,
+          "provider_error": null,
+          "elapsed_ms": 3010,
+          "error": null
+        },
+        {
+          "tier": "firecrawl",
+          "decision": "cloudflare",
+          "cost_kind": "firecrawl_credit",
+          "target_status_code": 200,
+          "provider_status_code": 200,
+          "provider_error_kind": null,
+          "provider_error": null,
+          "elapsed_ms": 3122,
+          "error": null
+        }
+      ],
+      "cooldown_until": 1789374824,
+      "error": "all tiers failed",
+      "content_chars": 0,
+      "expected_marker_found": false
+    }
+  },
+  {
+    "name": "redis",
+    "url": "https://redis.io/docs/latest/develop/use/patterns/distributed-locks/",
+    "wall_seconds": 11.88,
+    "response": {
+      "url": "https://redis.io/docs/latest/develop/use/patterns/distributed-locks/",
+      "status": "failed",
+      "tier_used": null,
+      "cost_kind": null,
+      "elapsed_ms": 11858,
+      "attempts": [
+        {
+          "tier": "http",
+          "decision": "needs_js",
+          "cost_kind": "free",
+          "target_status_code": 200,
+          "provider_status_code": null,
+          "provider_error_kind": null,
+          "provider_error": null,
+          "elapsed_ms": 60,
+          "error": null
+        },
+        {
+          "tier": "stealth",
+          "decision": "provider_failure",
+          "cost_kind": "free",
+          "target_status_code": null,
+          "provider_status_code": null,
+          "provider_error_kind": "service",
+          "provider_error": "BrowserType.launch: Executable doesn't exist at /home/ubuntu/.cache/ms-playwright/chromium_headless_shell-1223/chrome-linux/headless_shell\n╔════════════════════════════════════════════════════════════╗\n║ Looks like Playwright was just installed or updated.       ║\n║ Please run the following command to download new browsers: ║\n║                                                            ║\n║     playwright install                                     ║\n║                                                            ║\n║ <3 Playwright Team                                         ║\n╚════════════════════════════════════════════════════════════╝",
+          "elapsed_ms": 448,
+          "error": "BrowserType.launch: Executable doesn't exist at /home/ubuntu/.cache/ms-playwright/chromium_headless_shell-1223/chrome-linux/headless_shell\n╔════════════════════════════════════════════════════════════╗\n║ Looks like Playwright was just installed or updated.       ║\n║ Please run the following command to download new browsers: ║\n║                                                            ║\n║     playwright install                                     ║\n║                                                            ║\n║ <3 Playwright Team                                         ║\n╚════════════════════════════════════════════════════════════╝"
+        },
+        {
+          "tier": "undetected",
+          "decision": "provider_failure",
+          "cost_kind": "free",
+          "target_status_code": 200,
+          "provider_status_code": null,
+          "provider_error_kind": "service",
+          "provider_error": "Blocked by anti-bot protection: Structural: minimal_text, no_content_elements, script_heavy_shell (2647 bytes, 0 chars visible)",
+          "elapsed_ms": 334,
+          "error": "Blocked by anti-bot protection: Structural: minimal_text, no_content_elements, script_heavy_shell (2647 bytes, 0 chars visible)"
+        },
+        {
+          "tier": "camoufox",
+          "decision": "cloudflare",
+          "cost_kind": "free",
+          "target_status_code": 200,
+          "provider_status_code": null,
+          "provider_error_kind": null,
+          "provider_error": null,
+          "elapsed_ms": 5872,
+          "error": null
+        },
+        {
+          "tier": "rayobyte",
+          "decision": "needs_js",
+          "cost_kind": "rayobyte_credit",
+          "target_status_code": 200,
+          "provider_status_code": 200,
+          "provider_error_kind": null,
+          "provider_error": null,
+          "elapsed_ms": 1594,
+          "error": null
+        },
+        {
+          "tier": "firecrawl",
+          "decision": "cloudflare",
+          "cost_kind": "firecrawl_credit",
+          "target_status_code": 200,
+          "provider_status_code": 200,
+          "provider_error_kind": null,
+          "provider_error": null,
+          "elapsed_ms": 3550,
+          "error": null
+        }
+      ],
+      "cooldown_until": 1789374834,
+      "error": "all tiers failed",
+      "content_chars": 0,
+      "expected_marker_found": false
+    }
+  },
+  {
+    "name": "laravel",
+    "url": "https://laravel.com/docs/12.x/queries",
+    "wall_seconds": 39.9,
+    "response": {
+      "url": "https://laravel.com/docs/12.x/queries",
+      "status": "failed",
+      "tier_used": null,
+      "cost_kind": null,
+      "elapsed_ms": 39835,
+      "attempts": [
+        {
+          "tier": "http",
+          "decision": "cloudflare",
+          "cost_kind": "free",
+          "target_status_code": 200,
+          "provider_status_code": null,
+          "provider_error_kind": null,
+          "provider_error": null,
+          "elapsed_ms": 3616,
+          "error": null
+        },
+        {
+          "tier": "stealth",
+          "decision": "provider_failure",
+          "cost_kind": "free",
+          "target_status_code": null,
+          "provider_status_code": null,
+          "provider_error_kind": "service",
+          "provider_error": "BrowserType.launch: Executable doesn't exist at /home/ubuntu/.cache/ms-playwright/chromium_headless_shell-1223/chrome-linux/headless_shell\n╔════════════════════════════════════════════════════════════╗\n║ Looks like Playwright was just installed or updated.       ║\n║ Please run the following command to download new browsers: ║\n║                                                            ║\n║     playwright install                                     ║\n║                                                            ║\n║ <3 Playwright Team                                         ║\n╚════════════════════════════════════════════════════════════╝",
+          "elapsed_ms": 431,
+          "error": "BrowserType.launch: Executable doesn't exist at /home/ubuntu/.cache/ms-playwright/chromium_headless_shell-1223/chrome-linux/headless_shell\n╔════════════════════════════════════════════════════════════╗\n║ Looks like Playwright was just installed or updated.       ║\n║ Please run the following command to download new browsers: ║\n║                                                            ║\n║     playwright install                                     ║\n║                                                            ║\n║ <3 Playwright Team                                         ║\n╚════════════════════════════════════════════════════════════╝"
+        },
+        {
+          "tier": "undetected",
+          "decision": "cloudflare",
+          "cost_kind": "free",
+          "target_status_code": 301,
+          "provider_status_code": null,
+          "provider_error_kind": null,
+          "provider_error": null,
+          "elapsed_ms": 3950,
+          "error": ""
+        },
+        {
+          "tier": "camoufox",
+          "decision": "cloudflare",
+          "cost_kind": "free",
+          "target_status_code": 200,
+          "provider_status_code": null,
+          "provider_error_kind": null,
+          "provider_error": null,
+          "elapsed_ms": 5746,
+          "error": null
+        },
+        {
+          "tier": "rayobyte",
+          "decision": "cloudflare",
+          "cost_kind": "rayobyte_credit",
+          "target_status_code": 200,
+          "provider_status_code": 200,
+          "provider_error_kind": null,
+          "provider_error": null,
+          "elapsed_ms": 23387,
+          "error": null
+        },
+        {
+          "tier": "firecrawl",
+          "decision": "cloudflare",
+          "cost_kind": "firecrawl_credit",
+          "target_status_code": 200,
+          "provider_status_code": 200,
+          "provider_error_kind": null,
+          "provider_error": null,
+          "elapsed_ms": 2705,
+          "error": null
+        }
+      ],
+      "cooldown_until": 1789374846,
+      "error": "all tiers failed",
+      "content_chars": 0,
+      "expected_marker_found": false
+    }
+  },
+  {
+    "name": "unesco_verified",
+    "url": "https://whc.unesco.org/en/list/440/",
+    "wall_seconds": 0.49,
+    "response": {
+      "url": "https://whc.unesco.org/en/list/440/",
+      "status": "success",
+      "tier_used": "http",
+      "cost_kind": "free",
+      "elapsed_ms": 302,
+      "attempts": [
+        {
+          "tier": "http",
+          "decision": "success",
+          "cost_kind": "free",
+          "target_status_code": 200,
+          "provider_status_code": null,
+          "provider_error_kind": null,
+          "provider_error": null,
+          "elapsed_ms": 302,
+          "error": null
+        }
+      ],
+      "cooldown_until": null,
+      "error": null,
+      "content_chars": 29914,
+      "expected_marker_found": true
+    }
+  }
+]

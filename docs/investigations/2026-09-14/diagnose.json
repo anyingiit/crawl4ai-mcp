@@ -1,0 +1,146 @@
+{
+  "providers": {
+    "HTTP": {
+      "enabled": true,
+      "ready": true,
+      "reason": null
+    },
+    "STEALTH": {
+      "enabled": true,
+      "ready": true,
+      "reason": null
+    },
+    "UNDETECTED": {
+      "enabled": true,
+      "ready": true,
+      "reason": null
+    },
+    "CAMOUFOX": {
+      "enabled": true,
+      "ready": true,
+      "reason": null
+    },
+    "PROXY": {
+      "enabled": true,
+      "ready": true,
+      "reason": null
+    },
+    "RAYOBYTE": {
+      "enabled": true,
+      "ready": true,
+      "reason": null
+    },
+    "FIRECRAWL": {
+      "enabled": true,
+      "ready": true,
+      "reason": null
+    }
+  },
+  "recent_failures": [
+    {
+      "url": "REDACTED",
+      "time": 1789283619,
+      "error": "all tiers failed",
+      "attempts": [
+        "http",
+        "stealth",
+        "undetected",
+        "camoufox",
+        "rayobyte",
+        "firecrawl"
+      ]
+    },
+    {
+      "url": "REDACTED",
+      "time": 1789200672,
+      "error": "all tiers failed",
+      "attempts": [
+        "http"
+      ]
+    },
+    {
+      "url": "REDACTED",
+      "time": 1788712173,
+      "error": "all tiers failed",
+      "attempts": [
+        "http"
+      ]
+    },
+    {
+      "url": "REDACTED",
+      "time": 1788631695,
+      "error": "all tiers failed",
+      "attempts": [
+        "http"
+      ]
+    },
+    {
+      "url": "REDACTED",
+      "time": 1788591665,
+      "error": "all tiers failed",
+      "attempts": [
+        "http",
+        "stealth",
+        "undetected",
+        "camoufox",
+        "proxy",
+        "rayobyte",
+        "firecrawl"
+      ]
+    },
+    {
+      "url": "REDACTED",
+      "time": 1788574581,
+      "error": "all tiers failed",
+      "attempts": [
+        "http"
+      ]
+    },
+    {
+      "url": "REDACTED",
+      "time": 1788385294,
+      "error": "all tiers failed",
+      "attempts": [
+        "http"
+      ]
+    },
+    {
+      "url": "REDACTED",
+      "time": 1788385261,
+      "error": "all tiers failed",
+      "attempts": [
+        "http"
+      ]
+    },
+    {
+      "url": "REDACTED",
+      "time": 1788385241,
+      "error": "all tiers failed",
+      "attempts": [
+        "stealth"
+      ]
+    },
+    {
+      "url": "REDACTED",
+      "time": 1788385075,
+      "error": "all tiers failed",
+      "attempts": [
+        "http"
+      ]
+    },
+    {
+      "url": "REDACTED",
+      "time": 1788381625,
+      "error": "all tiers failed",
+      "attempts": [
+        "http",
+        "stealth",
+        "undetected",
+        "camoufox",
+        "rayobyte",
+        "firecrawl"
+      ]
+    }
+  ],
+  "policy_domain_count": 277
+}
