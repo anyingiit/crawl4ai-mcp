@@ -1,0 +1,32 @@
+[
+  {
+    "case": "normal_doc_mentions_turnstile",
+    "decision": "cloudflare"
+  },
+  {
+    "case": "empty_200",
+    "decision": "short_static"
+  },
+  {
+    "case": "bot_interstitial_200",
+    "decision": "short_static"
+  },
+  {
+    "case": "short_rendered_page_with_script",
+    "decision": "needs_js"
+  },
+  {
+    "case": "http_error_then_healthy_browser_and_sibling_url",
+    "first_status": "failed",
+    "http_calls": 2,
+    "healthy_browser_calls": 0,
+    "second_status": "cooldown",
+    "cooldown_seconds": 600
+  },
+  {
+    "case": "remembered_paid_tier_broken_lower_http_healthy",
+    "status": "failed",
+    "healthy_http_calls": 0,
+    "paid_calls": 1
+  }
+]

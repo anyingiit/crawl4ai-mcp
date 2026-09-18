@@ -1,0 +1,152 @@
+[
+  {
+    "tier": "camoufox",
+    "availability": {
+      "enabled": true,
+      "ready": true,
+      "reason": null
+    },
+    "fetch": {
+      "url": "https://example.com/",
+      "tier": 3,
+      "cost_kind": "free",
+      "target_status_code": 200,
+      "provider_status_code": null,
+      "provider_error_kind": null,
+      "provider_error": null,
+      "network_error": null,
+      "policy_error": null,
+      "redirected_url": null,
+      "elapsed_ms": 4620,
+      "error": null,
+      "decision": "short_static",
+      "title": "Example Domain",
+      "text_chars": 142,
+      "markdown_chars": 0,
+      "cf_matches": [],
+      "has_example": true,
+      "has_upload": false
+    },
+    "wall_seconds": 4.62
+  },
+  {
+    "tier": "proxy",
+    "availability": {
+      "enabled": true,
+      "ready": true,
+      "reason": null
+    },
+    "fetch": {
+      "url": "https://example.com/",
+      "tier": 4,
+      "cost_kind": "proxy_bandwidth",
+      "target_status_code": null,
+      "provider_status_code": null,
+      "provider_error_kind": "service",
+      "provider_error": "Unexpected error in _crawl_web at line 568 in wrap_api_call (.venv/lib/python3.12/site-packages/patchright/_impl/_connection.py):\nError: Page.goto: net::ERR_TUNNEL_CONNECTION_FAILED at https://example",
+      "network_error": null,
+      "policy_error": null,
+      "redirected_url": null,
+      "elapsed_ms": 1373,
+      "error": "Unexpected error in _crawl_web at line 568 in wrap_api_call (.venv/lib/python3.12/site-packages/patchright/_impl/_connection.py):\nError: Page.goto: net::ERR_TUNNEL_CONNECTION_FAILED at https://example.com/\nCall log:\n  - navigating to \"https://example.com/\", waiting until \"domcontentloaded\"\n\n\nCode context:\n 563           )\n 564           self._api_zone.set(parsed_st)\n 565           try:\n 566               return await cb()\n 567           except Exception as error:\n 568 →             raise rewrite_error(error, f\"{parsed_st['apiName']}: {error}\") from None\n 569           finally:\n 570               self._api_zone.set(None)\n 571   \n 572       def wrap_api_call_sync(\n 573           self, cb: Callable[[], Any], is_internal: bool = False, title: str = None",
+      "decision": "provider_failure",
+      "title": null,
+      "text_chars": 0,
+      "markdown_chars": 0,
+      "cf_matches": [],
+      "has_example": false,
+      "has_upload": false
+    },
+    "wall_seconds": 1.37
+  },
+  {
+    "tier": "rayobyte",
+    "availability": {
+      "enabled": true,
+      "ready": true,
+      "reason": null
+    },
+    "fetch": {
+      "url": "https://example.com/",
+      "tier": 5,
+      "cost_kind": "rayobyte_credit",
+      "target_status_code": 200,
+      "provider_status_code": 200,
+      "provider_error_kind": null,
+      "provider_error": null,
+      "network_error": null,
+      "policy_error": null,
+      "redirected_url": null,
+      "elapsed_ms": 2405,
+      "error": null,
+      "decision": "short_static",
+      "title": "Example Domain",
+      "text_chars": 142,
+      "markdown_chars": 0,
+      "cf_matches": [],
+      "has_example": true,
+      "has_upload": false
+    },
+    "wall_seconds": 2.41
+  },
+  {
+    "tier": "firecrawl",
+    "availability": {
+      "enabled": true,
+      "ready": true,
+      "reason": null
+    },
+    "fetch": {
+      "url": "https://example.com/",
+      "tier": 6,
+      "cost_kind": "firecrawl_credit",
+      "target_status_code": 200,
+      "provider_status_code": 200,
+      "provider_error_kind": null,
+      "provider_error": null,
+      "network_error": null,
+      "policy_error": null,
+      "redirected_url": null,
+      "elapsed_ms": 1188,
+      "error": null,
+      "decision": "short_static",
+      "title": null,
+      "text_chars": 127,
+      "markdown_chars": 167,
+      "cf_matches": [],
+      "has_example": true,
+      "has_upload": false
+    },
+    "wall_seconds": 1.19
+  },
+  {
+    "tier": "firecrawl",
+    "availability": {
+      "enabled": true,
+      "ready": true,
+      "reason": null
+    },
+    "fetch": {
+      "url": "https://developers.cloudflare.com/pages/get-started/direct-upload/",
+      "tier": 6,
+      "cost_kind": "firecrawl_credit",
+      "target_status_code": 200,
+      "provider_status_code": 200,
+      "provider_error_kind": null,
+      "provider_error": null,
+      "network_error": null,
+      "policy_error": null,
+      "redirected_url": null,
+      "elapsed_ms": 1134,
+      "error": null,
+      "decision": "success",
+      "title": null,
+      "text_chars": 5889,
+      "markdown_chars": 7961,
+      "cf_matches": [],
+      "has_example": false,
+      "has_upload": true
+    },
+    "wall_seconds": 1.15
+  }
+]

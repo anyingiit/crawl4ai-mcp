@@ -1,0 +1,28 @@
+{
+  "date_utc": "2026-09-14",
+  "commit": "6ea99eb",
+  "tests": {
+    "command": ".venv/bin/pytest -q -m 'not live'",
+    "passed": 511,
+    "deselected": 21,
+    "seconds": 10.6
+  },
+  "sample": {
+    "urls": 10,
+    "method": "targeted two-stage audit; first max_tier=undetected, then failed URLs retested at default maximum; UNESCO marker corrected by recheck",
+    "free_reported_success": 6,
+    "free_validated_content": 5,
+    "combined_validated_content": 6,
+    "combined_explicit_failures": 3,
+    "combined_false_success": 1,
+    "not_population_success_rate": true
+  },
+  "versions": {
+    "crawl4ai": "0.9.2",
+    "playwright": "1.60.0",
+    "patchright": "1.62.2",
+    "camoufox": "0.5.5",
+    "curl_cffi": "0.16.3",
+    "fastmcp": "3.4.7"
+  }
+}
