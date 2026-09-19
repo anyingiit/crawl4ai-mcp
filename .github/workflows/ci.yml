@@ -1,11 +1,22 @@
 # Source: GitHub starter workflow "Simple workflow" (MIT) — https://github.com/actions/starter-workflows/blob/main/ci/blank.yml
+#
+# Repaired by repocurator (feature 002):
+#   - `push` and `pull_request` triggered on `main`; this repository's default
+#     branch is `master`, so the workflow had never run on a push to it.
+#   - the test job ran the starter's placeholder echo, so a green check proved
+#     only that the runner could print a sentence.
+#
+# `tests/acceptance/` is excluded from the test command on purpose: those tests
+# are network- and provider-backed (they reach live tiers and paid APIs, and
+# pyproject.toml marks them `live` / `acceptance_*`), and CI has no credentials
+# for them. Everything under `tests/` that can run without the network runs.
 name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [master]
   pull_request:
-    branches: [main]
+    branches: [master]
   workflow_dispatch:
 
 # The workflow token is read-only by default.
@@ -41,18 +52,21 @@ jobs:
           fi
           echo "All actions are pinned to full-length commit SHAs."
 
-      # Add your project's linters below this line.
-
   test:
     name: Test
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
-      # Replace the step below with your project's test command. Pin any setup
-      # action you add to a full commit SHA, like the checkout step above.
-      - name: Run tests
-        run: echo "No tests yet. Replace this step with your project's test command."
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: '3.12'
+
+      - name: Build
+        run: pip install -e ".[test]"
+
+      - name: Test
+        run: pytest -q tests --ignore=tests/acceptance
