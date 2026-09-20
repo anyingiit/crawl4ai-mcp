@@ -1,9 +1,11 @@
 <!-- Source: Best-README-Template BLANK_README (Unlicense) — https://github.com/othneildrew/Best-README-Template -->
 <a id="readme-top"></a>
 
-# Crawl4ai Mcp
+# crawl4ai-mcp
 
-**前置**：Linux aarch64、Python 3.12、systemd user linger（`loginctl enable-linger ubuntu`）、`crawl4ai` 的 chromium 与 patchright、camoufox（可选）。.
+An MCP server that scrapes and maps web pages over a loopback HTTP endpoint, escalating through progressively heavier fetch tiers only when a lighter one fails.
+
+**English** · [简体中文](README.zh-CN.md)
 
 [![CI](https://github.com/anyingiit/crawl4ai-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/anyingiit/crawl4ai-mcp/actions/workflows/ci.yml)
 [![License](https://img.shields.io/github/license/anyingiit/crawl4ai-mcp)](LICENSE)
@@ -24,7 +26,18 @@
 
 ## About The Project
 
-**前置**：Linux aarch64、Python 3.12、systemd user linger（`loginctl enable-linger ubuntu`）、`crawl4ai` 的 chromium 与 patchright、camoufox（可选）。.
+crawl4ai-mcp exposes `scrape`, `crawl`, `map` and `diagnose` as MCP tools over
+HTTP, so an assistant can fetch a page without the caller choosing how. The
+choosing is the point: `src/crawl4ai_mcp/cascade.py` starts at the cheapest
+tier a URL has previously worked with and escalates only on failure, through a
+plain HTTP client, a headless browser, Camoufox and finally a paid provider,
+so most pages cost one request and the expensive path is reserved for the
+ones that need it. `crawl` walks a site breadth-first, same-origin only, up to
+a page and depth limit.
+
+It binds to `127.0.0.1` and refuses hosts it was not configured for, which makes
+it a local tool rather than a service: there is no authentication layer, because
+nothing off the machine is meant to reach it.
 
 See the [open issues](https://github.com/anyingiit/crawl4ai-mcp/issues) for planned features and known issues.
 
@@ -32,20 +45,52 @@ See the [open issues](https://github.com/anyingiit/crawl4ai-mcp/issues) for plan
 
 ### Prerequisites
 
-- Git
+- Python 3.12 or newer, the floor declared in `pyproject.toml`
+- A browser runtime for the middle tiers: Chromium via `crawl4ai`, plus Camoufox
+  if the optional `camoufox` extra is installed
+- For the packaged service, a Linux host with systemd user sessions, since
+  `systemd/crawl4ai-mcp.service` installs under the user manager rather than the
+  system one
+- API credentials only if the paid tiers are enabled; see `.env.example`
 
 ### Installation
 
 ```sh
 git clone https://github.com/anyingiit/crawl4ai-mcp.git
 cd crawl4ai-mcp
+python -m venv .venv && . .venv/bin/activate
+pip install -e ".[test]"
+crawl4ai-setup
 ```
+
+`crawl4ai-setup` downloads the Chromium build `crawl4ai` drives; skip it only
+if `CRAWL4AI_MODE=api` is set and no browser-backed tier will run.
+
+To run it as a background service on Linux instead, first create `.env` from
+`.env.example` and restrict it to owner-only, which `scripts/install-user-service.sh`
+requires even when no paid provider is enabled:
+
+```sh
+cp .env.example .env
+chmod 600 .env
+```
+
+Then `scripts/install-user-service.sh` installs the systemd unit and waits for
+the health endpoint to answer.
 
 ## Usage
 
+Start the server in the background, then check that it is up:
+
 ```sh
-crawl4ai-mcp --help
+crawl4ai-mcp &
+sleep 1
+curl -fsS http://127.0.0.1:11236/health
 ```
+
+The MCP endpoint is served at `/mcp` on the same port. Point an MCP client at
+`http://127.0.0.1:11236/mcp` and call `scrape` with a URL; pass `max_tier` to cap
+how far the cascade is allowed to escalate.
 
 ## Contributing
 
