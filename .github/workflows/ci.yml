@@ -6,10 +6,11 @@
 #   - the test job ran the starter's placeholder echo, so a green check proved
 #     only that the runner could print a sentence.
 #
-# `tests/acceptance/` is excluded from the test command on purpose: those tests
-# are network- and provider-backed (they reach live tiers and paid APIs, and
-# pyproject.toml marks them `live` / `acceptance_*`), and CI has no credentials
-# for them. Everything under `tests/` that can run without the network runs.
+# Tests marked `live` in pyproject.toml are deselected, not the whole
+# tests/acceptance/ directory: those tests reach live tiers and paid APIs, and
+# CI has no credentials for them, but tests/acceptance/test_acceptance_account.py
+# and tests/acceptance/test_acceptance_providers.py are deterministic and make
+# no network calls, so they run like everything else under `tests/`.
 name: CI
 
 on:
@@ -69,4 +70,4 @@ jobs:
         run: pip install -e ".[test]"
 
       - name: Test
-        run: pytest -q tests --ignore=tests/acceptance
+        run: pytest -q tests -m "not live"
