@@ -1,0 +1,674 @@
+[
+  {
+    "name": "example",
+    "url": "https://example.com/",
+    "wall_seconds": 0.13,
+    "response": {
+      "url": "https://example.com/",
+      "status": "success",
+      "tier_used": "http",
+      "cost_kind": "free",
+      "elapsed_ms": 28,
+      "attempts": [
+        {
+          "tier": "http",
+          "decision": "short_static",
+          "cost_kind": "free",
+          "target_status_code": 200,
+          "provider_status_code": null,
+          "provider_error_kind": null,
+          "provider_error": null,
+          "elapsed_ms": 28,
+          "error": null
+        }
+      ],
+      "cooldown_until": null,
+      "error": null,
+      "content_chars": 166,
+      "expected_marker_found": true
+    },
+    "fetches": [
+      {
+        "tier": "http",
+        "status": 200,
+        "decision": "short_static",
+        "html_chars": 559,
+        "text_chars": 142,
+        "title": "Example Domain",
+        "expected_marker_found": true,
+        "cf_matches": [],
+        "text_prefix": "Example Domain Example Domain This domain is for use in documentation examples without needing permission. Avoid use in operations. Learn more",
+        "error": null
+      }
+    ]
+  },
+  {
+    "name": "python",
+    "url": "https://docs.python.org/3/library/asyncio.html",
+    "wall_seconds": 0.39,
+    "response": {
+      "url": "https://docs.python.org/3/library/asyncio.html",
+      "status": "success",
+      "tier_used": "http",
+      "cost_kind": "free",
+      "elapsed_ms": 11,
+      "attempts": [
+        {
+          "tier": "http",
+          "decision": "success",
+          "cost_kind": "free",
+          "target_status_code": 200,
+          "provider_status_code": null,
+          "provider_error_kind": null,
+          "provider_error": null,
+          "elapsed_ms": 11,
+          "error": null
+        }
+      ],
+      "cooldown_until": null,
+      "error": null,
+      "content_chars": 8960,
+      "expected_marker_found": true
+    },
+    "fetches": [
+      {
+        "tier": "http",
+        "status": 200,
+        "decision": "success",
+        "html_chars": 25363,
+        "text_chars": 3911,
+        "title": "asyncio — Asynchronous I/O — Python 3.14.7 documentation",
+        "expected_marker_found": true,
+        "cf_matches": [],
+        "text_prefix": "asyncio — Asynchronous I/O — Python 3.14.7 documentation Theme Auto Light Dark Previous topic Networking and Interprocess Communication Next topic Runners This ",
+        "error": null
+      }
+    ]
+  },
+  {
+    "name": "quotes_js",
+    "url": "https://quotes.toscrape.com/js/",
+    "wall_seconds": 5.89,
+    "response": {
+      "url": "https://quotes.toscrape.com/js/",
+      "status": "success",
+      "tier_used": "undetected",
+      "cost_kind": "free",
+      "elapsed_ms": 5152,
+      "attempts": [
+        {
+          "tier": "http",
+          "decision": "needs_js",
+          "cost_kind": "free",
+          "target_status_code": 200,
+          "provider_status_code": null,
+          "provider_error_kind": null,
+          "provider_error": null,
+          "elapsed_ms": 736,
+          "error": null
+        },
+        {
+          "tier": "stealth",
+          "decision": "provider_failure",
+          "cost_kind": "free",
+          "target_status_code": null,
+          "provider_status_code": null,
+          "provider_error_kind": "service",
+          "provider_error": "BrowserType.launch: Executable doesn't exist at /home/ubuntu/.cache/ms-playwright/chromium_headless_shell-1223/chrome-linux/headless_shell\n╔════════════════════════════════════════════════════════════╗\n║ Looks like Playwright was just installed or updated.       ║\n║ Please run the following command to download new browsers: ║\n║                                                            ║\n║     playwright install                                     ║\n║                                                            ║\n║ <3 Playwright Team                                         ║\n╚════════════════════════════════════════════════════════════╝",
+          "elapsed_ms": 874,
+          "error": "BrowserType.launch: Executable doesn't exist at /home/ubuntu/.cache/ms-playwright/chromium_headless_shell-1223/chrome-linux/headless_shell\n╔════════════════════════════════════════════════════════════╗\n║ Looks like Playwright was just installed or updated.       ║\n║ Please run the following command to download new browsers: ║\n║                                                            ║\n║     playwright install                                     ║\n║                                                            ║\n║ <3 Playwright Team                                         ║\n╚════════════════════════════════════════════════════════════╝"
+        },
+        {
+          "tier": "undetected",
+          "decision": "success",
+          "cost_kind": "free",
+          "target_status_code": 200,
+          "provider_status_code": null,
+          "provider_error_kind": null,
+          "provider_error": null,
+          "elapsed_ms": 3542,
+          "error": ""
+        }
+      ],
+      "cooldown_until": null,
+      "error": null,
+      "content_chars": 1666,
+      "expected_marker_found": true
+    },
+    "fetches": [
+      {
+        "tier": "http",
+        "status": 200,
+        "decision": "needs_js",
+        "html_chars": 5806,
+        "text_chars": 91,
+        "title": "Quotes to Scrape",
+        "expected_marker_found": false,
+        "cf_matches": [],
+        "text_prefix": "Quotes to Scrape Quotes to Scrape Login Next → Quotes by: GoodReads.com Made with ❤ by Zyte",
+        "error": null
+      },
+      {
+        "tier": "stealth",
+        "status": null,
+        "decision": "provider_failure",
+        "html_chars": 0,
+        "text_chars": 0,
+        "title": null,
+        "expected_marker_found": false,
+        "cf_matches": [],
+        "text_prefix": "",
+        "error": "BrowserType.launch: Executable doesn't exist at /home/ubuntu/.cache/ms-playwright/chromium_headless_shell-1223/chrome-linux/headless_shell\n╔════════════════════════════════════════════════════════════╗\n║ Looks like Playwright was just installed or updated.       ║\n║ Please run the following command to download new browsers: ║\n║                                                            ║\n║     playwright install                                     ║\n║                                                            ║\n║ <3 Playwright Team                                         ║\n╚════════════════════════════════════════════════════════════╝"
+      },
+      {
+        "tier": "undetected",
+        "status": 200,
+        "decision": "success",
+        "html_chars": 8940,
+        "text_chars": 1512,
+        "title": "Quotes to Scrape",
+        "expected_marker_found": true,
+        "cf_matches": [],
+        "text_prefix": "Quotes to Scrape Quotes to Scrape Login “The world as we have created it is a process of our thinking. It cannot be changed without changing our thinking.” by A",
+        "error": ""
+      }
+    ]
+  },
+  {
+    "name": "cf_upload",
+    "url": "https://developers.cloudflare.com/pages/get-started/direct-upload/",
+    "wall_seconds": 1.45,
+    "response": {
+      "url": "https://developers.cloudflare.com/pages/get-started/direct-upload/",
+      "status": "failed",
+      "tier_used": null,
+      "cost_kind": null,
+      "elapsed_ms": 1377,
+      "attempts": [
+        {
+          "tier": "http",
+          "decision": "cloudflare",
+          "cost_kind": "free",
+          "target_status_code": 200,
+          "provider_status_code": null,
+          "provider_error_kind": null,
+          "provider_error": null,
+          "elapsed_ms": 61,
+          "error": null
+        },
+        {
+          "tier": "stealth",
+          "decision": "provider_failure",
+          "cost_kind": "free",
+          "target_status_code": null,
+          "provider_status_code": null,
+          "provider_error_kind": "service",
+          "provider_error": "BrowserType.launch: Executable doesn't exist at /home/ubuntu/.cache/ms-playwright/chromium_headless_shell-1223/chrome-linux/headless_shell\n╔════════════════════════════════════════════════════════════╗\n║ Looks like Playwright was just installed or updated.       ║\n║ Please run the following command to download new browsers: ║\n║                                                            ║\n║     playwright install                                     ║\n║                                                            ║\n║ <3 Playwright Team                                         ║\n╚════════════════════════════════════════════════════════════╝",
+          "elapsed_ms": 445,
+          "error": "BrowserType.launch: Executable doesn't exist at /home/ubuntu/.cache/ms-playwright/chromium_headless_shell-1223/chrome-linux/headless_shell\n╔════════════════════════════════════════════════════════════╗\n║ Looks like Playwright was just installed or updated.       ║\n║ Please run the following command to download new browsers: ║\n║                                                            ║\n║     playwright install                                     ║\n║                                                            ║\n║ <3 Playwright Team                                         ║\n╚════════════════════════════════════════════════════════════╝"
+        },
+        {
+          "tier": "undetected",
+          "decision": "cloudflare",
+          "cost_kind": "free",
+          "target_status_code": 200,
+          "provider_status_code": null,
+          "provider_error_kind": null,
+          "provider_error": null,
+          "elapsed_ms": 871,
+          "error": ""
+        }
+      ],
+      "cooldown_until": 1789374706,
+      "error": "all tiers failed",
+      "content_chars": 0,
+      "expected_marker_found": false
+    },
+    "fetches": [
+      {
+        "tier": "http",
+        "status": 200,
+        "decision": "cloudflare",
+        "html_chars": 144479,
+        "text_chars": 9925,
+        "title": "Direct Upload · Cloudflare Pages docs",
+        "expected_marker_found": true,
+        "cf_matches": [
+          "turnstile"
+        ],
+        "text_prefix": "Direct Upload · Cloudflare Pages docs Skip to content Documentation Index Fetch the complete documentation index at: https://developers.cloudflare.com/pages/llm",
+        "error": null
+      },
+      {
+        "tier": "stealth",
+        "status": null,
+        "decision": "provider_failure",
+        "html_chars": 0,
+        "text_chars": 0,
+        "title": null,
+        "expected_marker_found": false,
+        "cf_matches": [],
+        "text_prefix": "",
+        "error": "BrowserType.launch: Executable doesn't exist at /home/ubuntu/.cache/ms-playwright/chromium_headless_shell-1223/chrome-linux/headless_shell\n╔════════════════════════════════════════════════════════════╗\n║ Looks like Playwright was just installed or updated.       ║\n║ Please run the following command to download new browsers: ║\n║                                                            ║\n║     playwright install                                     ║\n║                                                            ║\n║ <3 Playwright Team                                         ║\n╚════════════════════════════════════════════════════════════╝"
+      },
+      {
+        "tier": "undetected",
+        "status": 200,
+        "decision": "cloudflare",
+        "html_chars": 191464,
+        "text_chars": 9948,
+        "title": "Direct Upload · Cloudflare Pages docs",
+        "expected_marker_found": true,
+        "cf_matches": [
+          "turnstile"
+        ],
+        "text_prefix": "Direct Upload · Cloudflare Pages docs Skip to content Documentation Index Fetch the complete documentation index at: https://developers.cloudflare.com/pages/llm",
+        "error": ""
+      }
+    ]
+  },
+  {
+    "name": "cf_waiting",
+    "url": "https://developers.cloudflare.com/waiting-room/plans/",
+    "wall_seconds": 1.24,
+    "response": {
+      "url": "https://developers.cloudflare.com/waiting-room/plans/",
+      "status": "failed",
+      "tier_used": null,
+      "cost_kind": null,
+      "elapsed_ms": 1200,
+      "attempts": [
+        {
+          "tier": "http",
+          "decision": "cloudflare",
+          "cost_kind": "free",
+          "target_status_code": 200,
+          "provider_status_code": null,
+          "provider_error_kind": null,
+          "provider_error": null,
+          "elapsed_ms": 72,
+          "error": null
+        },
+        {
+          "tier": "stealth",
+          "decision": "provider_failure",
+          "cost_kind": "free",
+          "target_status_code": null,
+          "provider_status_code": null,
+          "provider_error_kind": "service",
+          "provider_error": "BrowserType.launch: Executable doesn't exist at /home/ubuntu/.cache/ms-playwright/chromium_headless_shell-1223/chrome-linux/headless_shell\n╔════════════════════════════════════════════════════════════╗\n║ Looks like Playwright was just installed or updated.       ║\n║ Please run the following command to download new browsers: ║\n║                                                            ║\n║     playwright install                                     ║\n║                                                            ║\n║ <3 Playwright Team                                         ║\n╚════════════════════════════════════════════════════════════╝",
+          "elapsed_ms": 446,
+          "error": "BrowserType.launch: Executable doesn't exist at /home/ubuntu/.cache/ms-playwright/chromium_headless_shell-1223/chrome-linux/headless_shell\n╔════════════════════════════════════════════════════════════╗\n║ Looks like Playwright was just installed or updated.       ║\n║ Please run the following command to download new browsers: ║\n║                                                            ║\n║     playwright install                                     ║\n║                                                            ║\n║ <3 Playwright Team                                         ║\n╚════════════════════════════════════════════════════════════╝"
+        },
+        {
+          "tier": "undetected",
+          "decision": "cloudflare",
+          "cost_kind": "free",
+          "target_status_code": 200,
+          "provider_status_code": null,
+          "provider_error_kind": null,
+          "provider_error": null,
+          "elapsed_ms": 682,
+          "error": ""
+        }
+      ],
+      "cooldown_until": 1789374708,
+      "error": "all tiers failed",
+      "content_chars": 0,
+      "expected_marker_found": false
+    },
+    "fetches": [
+      {
+        "tier": "http",
+        "status": 200,
+        "decision": "cloudflare",
+        "html_chars": 102749,
+        "text_chars": 3724,
+        "title": "Features by plan type · Cloudflare Waiting Room docs",
+        "expected_marker_found": true,
+        "cf_matches": [
+          "turnstile"
+        ],
+        "text_prefix": "Features by plan type · Cloudflare Waiting Room docs Skip to content Documentation Index Fetch the complete documentation index at: https://developers.cloudflar",
+        "error": null
+      },
+      {
+        "tier": "stealth",
+        "status": null,
+        "decision": "provider_failure",
+        "html_chars": 0,
+        "text_chars": 0,
+        "title": null,
+        "expected_marker_found": false,
+        "cf_matches": [],
+        "text_prefix": "",
+        "error": "BrowserType.launch: Executable doesn't exist at /home/ubuntu/.cache/ms-playwright/chromium_headless_shell-1223/chrome-linux/headless_shell\n╔════════════════════════════════════════════════════════════╗\n║ Looks like Playwright was just installed or updated.       ║\n║ Please run the following command to download new browsers: ║\n║                                                            ║\n║     playwright install                                     ║\n║                                                            ║\n║ <3 Playwright Team                                         ║\n╚════════════════════════════════════════════════════════════╝"
+      },
+      {
+        "tier": "undetected",
+        "status": 200,
+        "decision": "cloudflare",
+        "html_chars": 146055,
+        "text_chars": 3747,
+        "title": "Features by plan type · Cloudflare Waiting Room docs",
+        "expected_marker_found": true,
+        "cf_matches": [
+          "turnstile"
+        ],
+        "text_prefix": "Features by plan type · Cloudflare Waiting Room docs Skip to content Documentation Index Fetch the complete documentation index at: https://developers.cloudflar",
+        "error": ""
+      }
+    ]
+  },
+  {
+    "name": "redis",
+    "url": "https://redis.io/docs/latest/develop/use/patterns/distributed-locks/",
+    "wall_seconds": 1.14,
+    "response": {
+      "url": "https://redis.io/docs/latest/develop/use/patterns/distributed-locks/",
+      "status": "failed",
+      "tier_used": null,
+      "cost_kind": null,
+      "elapsed_ms": 811,
+      "attempts": [
+        {
+          "tier": "http",
+          "decision": "needs_js",
+          "cost_kind": "free",
+          "target_status_code": 200,
+          "provider_status_code": null,
+          "provider_error_kind": null,
+          "provider_error": null,
+          "elapsed_ms": 75,
+          "error": null
+        },
+        {
+          "tier": "stealth",
+          "decision": "provider_failure",
+          "cost_kind": "free",
+          "target_status_code": null,
+          "provider_status_code": null,
+          "provider_error_kind": "service",
+          "provider_error": "BrowserType.launch: Executable doesn't exist at /home/ubuntu/.cache/ms-playwright/chromium_headless_shell-1223/chrome-linux/headless_shell\n╔════════════════════════════════════════════════════════════╗\n║ Looks like Playwright was just installed or updated.       ║\n║ Please run the following command to download new browsers: ║\n║                                                            ║\n║     playwright install                                     ║\n║                                                            ║\n║ <3 Playwright Team                                         ║\n╚════════════════════════════════════════════════════════════╝",
+          "elapsed_ms": 417,
+          "error": "BrowserType.launch: Executable doesn't exist at /home/ubuntu/.cache/ms-playwright/chromium_headless_shell-1223/chrome-linux/headless_shell\n╔════════════════════════════════════════════════════════════╗\n║ Looks like Playwright was just installed or updated.       ║\n║ Please run the following command to download new browsers: ║\n║                                                            ║\n║     playwright install                                     ║\n║                                                            ║\n║ <3 Playwright Team                                         ║\n╚════════════════════════════════════════════════════════════╝"
+        },
+        {
+          "tier": "undetected",
+          "decision": "provider_failure",
+          "cost_kind": "free",
+          "target_status_code": 200,
+          "provider_status_code": null,
+          "provider_error_kind": "service",
+          "provider_error": "Blocked by anti-bot protection: Structural: minimal_text, no_content_elements, script_heavy_shell (2644 bytes, 0 chars visible)",
+          "elapsed_ms": 319,
+          "error": "Blocked by anti-bot protection: Structural: minimal_text, no_content_elements, script_heavy_shell (2644 bytes, 0 chars visible)"
+        }
+      ],
+      "cooldown_until": 1789374709,
+      "error": "all tiers failed",
+      "content_chars": 0,
+      "expected_marker_found": false
+    },
+    "fetches": [
+      {
+        "tier": "http",
+        "status": 200,
+        "decision": "needs_js",
+        "html_chars": 1256,
+        "text_chars": 72,
+        "title": "https://redis.io/docs/latest/develop/clients/patterns/distributed-locks/",
+        "expected_marker_found": false,
+        "cf_matches": [],
+        "text_prefix": "https://redis.io/docs/latest/develop/clients/patterns/distributed-locks/",
+        "error": null
+      },
+      {
+        "tier": "stealth",
+        "status": null,
+        "decision": "provider_failure",
+        "html_chars": 0,
+        "text_chars": 0,
+        "title": null,
+        "expected_marker_found": false,
+        "cf_matches": [],
+        "text_prefix": "",
+        "error": "BrowserType.launch: Executable doesn't exist at /home/ubuntu/.cache/ms-playwright/chromium_headless_shell-1223/chrome-linux/headless_shell\n╔════════════════════════════════════════════════════════════╗\n║ Looks like Playwright was just installed or updated.       ║\n║ Please run the following command to download new browsers: ║\n║                                                            ║\n║     playwright install                                     ║\n║                                                            ║\n║ <3 Playwright Team                                         ║\n╚════════════════════════════════════════════════════════════╝"
+      },
+      {
+        "tier": "undetected",
+        "status": 200,
+        "decision": "provider_failure",
+        "html_chars": 0,
+        "text_chars": 0,
+        "title": null,
+        "expected_marker_found": false,
+        "cf_matches": [],
+        "text_prefix": "",
+        "error": "Blocked by anti-bot protection: Structural: minimal_text, no_content_elements, script_heavy_shell (2644 bytes, 0 chars visible)"
+      }
+    ]
+  },
+  {
+    "name": "laravel",
+    "url": "https://laravel.com/docs/12.x/queries",
+    "wall_seconds": 10.18,
+    "response": {
+      "url": "https://laravel.com/docs/12.x/queries",
+      "status": "failed",
+      "tier_used": null,
+      "cost_kind": null,
+      "elapsed_ms": 9305,
+      "attempts": [
+        {
+          "tier": "http",
+          "decision": "cloudflare",
+          "cost_kind": "free",
+          "target_status_code": 200,
+          "provider_status_code": null,
+          "provider_error_kind": null,
+          "provider_error": null,
+          "elapsed_ms": 3961,
+          "error": null
+        },
+        {
+          "tier": "stealth",
+          "decision": "provider_failure",
+          "cost_kind": "free",
+          "target_status_code": null,
+          "provider_status_code": null,
+          "provider_error_kind": "service",
+          "provider_error": "BrowserType.launch: Executable doesn't exist at /home/ubuntu/.cache/ms-playwright/chromium_headless_shell-1223/chrome-linux/headless_shell\n╔════════════════════════════════════════════════════════════╗\n║ Looks like Playwright was just installed or updated.       ║\n║ Please run the following command to download new browsers: ║\n║                                                            ║\n║     playwright install                                     ║\n║                                                            ║\n║ <3 Playwright Team                                         ║\n╚════════════════════════════════════════════════════════════╝",
+          "elapsed_ms": 414,
+          "error": "BrowserType.launch: Executable doesn't exist at /home/ubuntu/.cache/ms-playwright/chromium_headless_shell-1223/chrome-linux/headless_shell\n╔════════════════════════════════════════════════════════════╗\n║ Looks like Playwright was just installed or updated.       ║\n║ Please run the following command to download new browsers: ║\n║                                                            ║\n║     playwright install                                     ║\n║                                                            ║\n║ <3 Playwright Team                                         ║\n╚════════════════════════════════════════════════════════════╝"
+        },
+        {
+          "tier": "undetected",
+          "decision": "cloudflare",
+          "cost_kind": "free",
+          "target_status_code": 301,
+          "provider_status_code": null,
+          "provider_error_kind": null,
+          "provider_error": null,
+          "elapsed_ms": 4930,
+          "error": ""
+        }
+      ],
+      "cooldown_until": 1789374710,
+      "error": "all tiers failed",
+      "content_chars": 0,
+      "expected_marker_found": false
+    },
+    "fetches": [
+      {
+        "tier": "http",
+        "status": 200,
+        "decision": "cloudflare",
+        "html_chars": 1114082,
+        "text_chars": 78514,
+        "title": "Database: Query Builder | Laravel 12.x - The clean stack for Artisans and agents",
+        "expected_marker_found": true,
+        "cf_matches": [
+          "turnstile"
+        ],
+        "text_prefix": "Database: Query Builder | Laravel 12.x - The clean stack for Artisans and agents Home ⌘K Version Master Version 13.x Version 12.x Version 11.x Version 10.x Vers",
+        "error": null
+      },
+      {
+        "tier": "stealth",
+        "status": null,
+        "decision": "provider_failure",
+        "html_chars": 0,
+        "text_chars": 0,
+        "title": null,
+        "expected_marker_found": false,
+        "cf_matches": [],
+        "text_prefix": "",
+        "error": "BrowserType.launch: Executable doesn't exist at /home/ubuntu/.cache/ms-playwright/chromium_headless_shell-1223/chrome-linux/headless_shell\n╔════════════════════════════════════════════════════════════╗\n║ Looks like Playwright was just installed or updated.       ║\n║ Please run the following command to download new browsers: ║\n║                                                            ║\n║     playwright install                                     ║\n║                                                            ║\n║ <3 Playwright Team                                         ║\n╚════════════════════════════════════════════════════════════╝"
+      },
+      {
+        "tier": "undetected",
+        "status": 301,
+        "decision": "cloudflare",
+        "html_chars": 1170199,
+        "text_chars": 78513,
+        "title": "Database: Query Builder | Laravel 12.x - The clean stack for Artisans and agents",
+        "expected_marker_found": true,
+        "cf_matches": [
+          "turnstile"
+        ],
+        "text_prefix": "Database: Query Builder | Laravel 12.x - The clean stack for Artisans and agents Home Search K ⌘K Version Master Version 13.x Version 12.x Version 11.x Version ",
+        "error": ""
+      }
+    ]
+  },
+  {
+    "name": "nature",
+    "url": "https://www.nature.com/articles/s41467-023-35886-6",
+    "wall_seconds": 0.32,
+    "response": {
+      "url": "https://www.nature.com/articles/s41467-023-35886-6",
+      "status": "success",
+      "tier_used": "http",
+      "cost_kind": "free",
+      "elapsed_ms": 62,
+      "attempts": [
+        {
+          "tier": "http",
+          "decision": "success",
+          "cost_kind": "free",
+          "target_status_code": 200,
+          "provider_status_code": null,
+          "provider_error_kind": null,
+          "provider_error": null,
+          "elapsed_ms": 62,
+          "error": null
+        }
+      ],
+      "cooldown_until": null,
+      "error": null,
+      "content_chars": 211,
+      "expected_marker_found": false
+    },
+    "fetches": [
+      {
+        "tier": "http",
+        "status": 200,
+        "decision": "success",
+        "html_chars": 3036,
+        "text_chars": 315,
+        "title": "Client Challenge",
+        "expected_marker_found": false,
+        "cf_matches": [],
+        "text_prefix": "Client Challenge JavaScript is disabled in your browser. Please enable JavaScript to proceed. A required part of this site couldn’t load. This may be due to a b",
+        "error": null
+      }
+    ]
+  },
+  {
+    "name": "unesco",
+    "url": "https://whc.unesco.org/en/list/440/",
+    "wall_seconds": 0.55,
+    "response": {
+      "url": "https://whc.unesco.org/en/list/440/",
+      "status": "success",
+      "tier_used": "http",
+      "cost_kind": "free",
+      "elapsed_ms": 280,
+      "attempts": [
+        {
+          "tier": "http",
+          "decision": "success",
+          "cost_kind": "free",
+          "target_status_code": 200,
+          "provider_status_code": null,
+          "provider_error_kind": null,
+          "provider_error": null,
+          "elapsed_ms": 280,
+          "error": null
+        }
+      ],
+      "cooldown_until": null,
+      "error": null,
+      "content_chars": 29914,
+      "expected_marker_found": false
+    },
+    "fetches": [
+      {
+        "tier": "http",
+        "status": 200,
+        "decision": "success",
+        "html_chars": 159517,
+        "text_chars": 16664,
+        "title": "Mogao Caves - UNESCO World Heritage Centre",
+        "expected_marker_found": false,
+        "cf_matches": [],
+        "text_prefix": "Mogao Caves - UNESCO World Heritage Centre Your browser does not support JavaScript. World Heritage Convention Help preserve sites now ! Explore UNESCO English ",
+        "error": null
+      }
+    ]
+  },
+  {
+    "name": "kubernetes",
+    "url": "https://kubernetes.io/docs/concepts/workloads/pods/disruptions/",
+    "wall_seconds": 0.8,
+    "response": {
+      "url": "https://kubernetes.io/docs/concepts/workloads/pods/disruptions/",
+      "status": "success",
+      "tier_used": "http",
+      "cost_kind": "free",
+      "elapsed_ms": 24,
+      "attempts": [
+        {
+          "tier": "http",
+          "decision": "success",
+          "cost_kind": "free",
+          "target_status_code": 200,
+          "provider_status_code": null,
+          "provider_error_kind": null,
+          "provider_error": null,
+          "elapsed_ms": 24,
+          "error": null
+        }
+      ],
+      "cooldown_until": null,
+      "error": null,
+      "content_chars": 123325,
+      "expected_marker_found": true
+    },
+    "fetches": [
+      {
+        "tier": "http",
+        "status": 200,
+        "decision": "success",
+        "html_chars": 519189,
+        "text_chars": 37939,
+        "title": "Disruptions | Kubernetes",
+        "expected_marker_found": true,
+        "cf_matches": [],
+        "text_prefix": "Disruptions | Kubernetes Kubernetes Documentation Kubernetes Blog Training Careers Partners Community Versions Release Information v1.37 v1.36 v1.35 v1.34 v1.33",
+        "error": null
+      }
+    ]
+  }
+]
