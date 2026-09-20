@@ -24,7 +24,12 @@ async def main():
  async with Client('http://127.0.0.1:11236/mcp') as c:
   r=await c.call_tool('diagnose',{})
   d=json.loads(r.content[0].text)
-  selected={'providers':d['providers'],'recent_failures':d['recent_failures'],'policy_domain_count':len(d['domain_policies'])}
+  # `recent_failures` comes from the live daemon, so it holds whatever
+  # unrelated requests happened to fail -- full paths and query strings.
+  # This file is tracked, so the URL is dropped and the parts that
+  # actually diagnose anything are kept.
+  failures=[{**f,'url':'REDACTED'} for f in d['recent_failures']]
+  selected={'providers':d['providers'],'recent_failures':failures,'policy_domain_count':len(d['domain_policies'])}
   (OUT/'diagnose.json').write_text(json.dumps(selected,indent=2,ensure_ascii=False))
  with tempfile.TemporaryDirectory() as td:
   cfg=load_config(ROOT/'config.toml',env=dotenv_values(ROOT/'.env')).model_copy(update={'database_path':Path(td)/'policy.db'})
