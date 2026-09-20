@@ -28,6 +28,8 @@
   </ol>
 </details>
 
+<a id="about-the-project"></a>
+
 ## 关于本项目
 
 crawl4ai-mcp 以 MCP 工具的形式通过 HTTP 暴露 `scrape`、`crawl`、`map` 和
@@ -41,6 +43,8 @@ crawl4ai-mcp 以 MCP 工具的形式通过 HTTP 暴露 `scrape`、`crawl`、`map
 没有鉴权层，因为本就不打算让机器之外的任何东西访问它。
 
 计划中的功能与已知问题，见 [open issues](https://github.com/anyingiit/crawl4ai-mcp/issues)。
+
+<a id="getting-started"></a>
 
 ## 开始使用
 
@@ -78,6 +82,8 @@ chmod 600 .env
 之后 `scripts/install-user-service.sh` 会安装 systemd 单元并等待健康检查端点
 作出响应。
 
+<a id="usage"></a>
+
 ## 用法
 
 在后台启动服务，然后确认它已就绪：
@@ -92,15 +98,21 @@ MCP 端点在同一端口的 `/mcp` 路径上。把 MCP 客户端指向
 `http://127.0.0.1:11236/mcp` 并调用 `scrape` 传入一个 URL；用 `max_tier`
 限制级联最多允许升级到哪一层。
 
+<a id="contributing"></a>
+
 ## 参与贡献
 
 欢迎参与。[CONTRIBUTING.md](CONTRIBUTING.md) 说明如何提交 issue 或 pull request，[CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md) 说明对所有参与者的行为要求。
 
 请不要在公开的 issue 或 pull request 中报告安全问题。[SECURITY.md](SECURITY.md) 说明了私下报告的方式。
 
+<a id="license"></a>
+
 ## 许可证
 
 以 MIT 许可证分发。详见 [LICENSE](LICENSE)。
+
+<a id="contact"></a>
 
 ## 联系方式
 
