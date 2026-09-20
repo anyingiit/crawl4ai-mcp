@@ -26,12 +26,14 @@ An MCP server that scrapes and maps web pages over a loopback HTTP endpoint, esc
 
 ## About The Project
 
-crawl4ai-mcp exposes `scrape`, `map` and `diagnose` as MCP tools over HTTP, so an
-assistant can fetch a page without the caller choosing how. The choosing is the
-point: `src/crawl4ai_mcp/cascade.py` starts at the cheapest tier a URL has
-previously worked with and escalates only on failure, through a plain HTTP
-client, a headless browser, Camoufox and finally a paid provider, so most pages
-cost one request and the expensive path is reserved for the ones that need it.
+crawl4ai-mcp exposes `scrape`, `crawl`, `map` and `diagnose` as MCP tools over
+HTTP, so an assistant can fetch a page without the caller choosing how. The
+choosing is the point: `src/crawl4ai_mcp/cascade.py` starts at the cheapest
+tier a URL has previously worked with and escalates only on failure, through a
+plain HTTP client, a headless browser, Camoufox and finally a paid provider,
+so most pages cost one request and the expensive path is reserved for the
+ones that need it. `crawl` walks a site breadth-first, same-origin only, up to
+a page and depth limit.
 
 It binds to `127.0.0.1` and refuses hosts it was not configured for, which makes
 it a local tool rather than a service: there is no authentication layer, because
@@ -58,17 +60,31 @@ git clone https://github.com/anyingiit/crawl4ai-mcp.git
 cd crawl4ai-mcp
 python -m venv .venv && . .venv/bin/activate
 pip install -e ".[test]"
+crawl4ai-setup
 ```
 
-To run it as a background service on Linux instead, `scripts/install-user-service.sh`
-installs the systemd unit and waits for the health endpoint to answer.
+`crawl4ai-setup` downloads the Chromium build `crawl4ai` drives; skip it only
+if `CRAWL4AI_MODE=api` is set and no browser-backed tier will run.
+
+To run it as a background service on Linux instead, first create `.env` from
+`.env.example` and restrict it to owner-only, which `scripts/install-user-service.sh`
+requires even when no paid provider is enabled:
+
+```sh
+cp .env.example .env
+chmod 600 .env
+```
+
+Then `scripts/install-user-service.sh` installs the systemd unit and waits for
+the health endpoint to answer.
 
 ## Usage
 
-Start the server in the foreground, then check that it is up:
+Start the server in the background, then check that it is up:
 
 ```sh
-crawl4ai-mcp
+crawl4ai-mcp &
+sleep 1
 curl -fsS http://127.0.0.1:11236/health
 ```
 
